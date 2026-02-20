@@ -445,11 +445,11 @@ cat > "$BACKUP_DIR/manifest.json" << MANIFEST
 MANIFEST
 
 # ============================================================
-# CLAUDE.MD FOR THE BACKUP FOLDER
+# RESTORE GUIDE FOR THE BACKUP FOLDER
 # ============================================================
-step "Generating CLAUDE.md"
+step "Generating RESTORE-GUIDE.md"
 
-cat > "$BACKUP_DIR/CLAUDE.md" << 'CLAUDEMD'
+cat > "$BACKUP_DIR/RESTORE-GUIDE.md" << 'CLAUDEMD'
 # Workspace Backup
 
 Machine: arjunkannan's MacBook, macOS

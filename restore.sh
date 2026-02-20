@@ -12,7 +12,7 @@ echo "  Source: $BACKUP_DIR"
 echo ""
 
 # --- Validate backup structure ---
-for required in CLAUDE.md manifest.json claude-code codex-cli conductor shell-env volta; do
+for required in RESTORE-GUIDE.md manifest.json claude-code codex-cli conductor shell-env volta; do
   if [ ! -e "$BACKUP_DIR/$required" ]; then
     echo "ERROR: Missing $BACKUP_DIR/$required — is this a valid backup?"
     exit 1
