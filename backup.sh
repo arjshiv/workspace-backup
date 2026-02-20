@@ -369,6 +369,21 @@ fi
 echo "  Shell config done."
 
 # ============================================================
+# HOMEBREW
+# ============================================================
+step "Backing up Homebrew package list"
+
+mkdir -p "$BACKUP_DIR/homebrew"
+if command -v brew &>/dev/null; then
+  brew bundle dump --file="$BACKUP_DIR/homebrew/Brewfile" --force 2>/dev/null || warn "Failed to dump Brewfile"
+  brew list --versions > "$BACKUP_DIR/homebrew/brew-list.txt" 2>/dev/null || true
+  brew list --cask --versions > "$BACKUP_DIR/homebrew/brew-cask-list.txt" 2>/dev/null || true
+  echo "  Brewfile and package lists saved."
+else
+  warn "Homebrew not found"
+fi
+
+# ============================================================
 # VOLTA
 # ============================================================
 step "Backing up Volta package manifest"
@@ -423,6 +438,7 @@ cat > "$BACKUP_DIR/manifest.json" << MANIFEST
     "shared_agents": "$(du -sh "$BACKUP_DIR/shared-agents" 2>/dev/null | cut -f1)",
     "conductor": "$(du -sh "$BACKUP_DIR/conductor" 2>/dev/null | cut -f1)",
     "shell_env": "$(du -sh "$BACKUP_DIR/shell-env" 2>/dev/null | cut -f1)",
+    "homebrew": "$(du -sh "$BACKUP_DIR/homebrew" 2>/dev/null | cut -f1)",
     "volta": "$(du -sh "$BACKUP_DIR/volta" 2>/dev/null | cut -f1)"
   }
 }

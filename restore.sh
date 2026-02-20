@@ -44,13 +44,26 @@ if ! command -v brew &>/dev/null; then
   eval "$(/opt/homebrew/bin/brew shellenv 2>/dev/null || /usr/local/bin/brew shellenv 2>/dev/null)"
 fi
 
-# Essential brew packages
-for pkg in git gh sqlite3 jq; do
+# Minimal essentials first (needed by restore script itself)
+for pkg in git jq; do
   if ! command -v "$pkg" &>/dev/null; then
     echo "  Installing $pkg..."
     brew install "$pkg" 2>/dev/null || warn "Failed to install $pkg"
   fi
 done
+
+# Full Homebrew restore from Brewfile
+if [ -f "$BACKUP_DIR/homebrew/Brewfile" ]; then
+  echo "  Restoring all Homebrew packages from Brewfile..."
+  echo "  (This may take a while — installing formulae, casks, and taps)"
+  brew bundle install --file="$BACKUP_DIR/homebrew/Brewfile" --no-lock 2>/dev/null || warn "Some Brewfile packages failed to install"
+  echo "  Homebrew packages restored."
+else
+  warn "No Brewfile found — installing minimal packages only"
+  for pkg in gh sqlite3 ast-grep fd; do
+    command -v "$pkg" &>/dev/null || brew install "$pkg" 2>/dev/null || true
+  done
+fi
 
 # Volta
 if ! command -v volta &>/dev/null; then
@@ -73,12 +86,6 @@ if [ ! -d "$ZSH_CUSTOM/plugins/zsh-autosuggestions" ]; then
 fi
 if [ ! -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ]; then
   git clone https://github.com/zsh-users/zsh-syntax-highlighting "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" 2>/dev/null || warn "Failed to clone zsh-syntax-highlighting"
-fi
-
-# pyenv
-if ! command -v pyenv &>/dev/null; then
-  echo "  Installing pyenv..."
-  brew install pyenv 2>/dev/null || warn "Failed to install pyenv"
 fi
 
 # Rust / Cargo
