@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_DATE=$(date +%Y-%m-%d)
-BACKUP_DIR="$HOME/Desktop/workspace-backup-${BACKUP_DATE}"
+BACKUP_DIR="$SCRIPT_DIR/backups/workspace-backup-${BACKUP_DATE}"
 CLAUDE_HOME="$HOME/.claude"
 CODEX_HOME="$HOME/.codex"
 CONDUCTOR_HOME="$HOME/conductor"
@@ -39,9 +40,9 @@ if [ -d "$BACKUP_DIR" ]; then
   rm -rf "$BACKUP_DIR"
 fi
 
-avail_mb=$(df -m "$HOME/Desktop" | awk 'NR==2{print $4}')
+avail_mb=$(df -m "$SCRIPT_DIR" | awk 'NR==2{print $4}')
 if [ "$avail_mb" -lt 250 ]; then
-  echo "ERROR: Less than 250MB free on Desktop. Need space for backup."
+  echo "ERROR: Less than 250MB free. Need space for backup."
   exit 1
 fi
 
@@ -506,7 +507,6 @@ CLAUDEMD
 # ============================================================
 step "Copying scripts into backup"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cp "$SCRIPT_DIR/backup.sh" "$BACKUP_DIR/"
 cp "$SCRIPT_DIR/restore.sh" "$BACKUP_DIR/" 2>/dev/null || warn "restore.sh not found next to backup.sh"
 
