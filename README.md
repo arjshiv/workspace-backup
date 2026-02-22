@@ -20,13 +20,15 @@ Conductor worktrees are captured as JSON manifests + `git diff` patches + untrac
 ### Backup (on source Mac)
 
 ```bash
-./backup.sh
+./backup.sh              # full backup
+./backup.sh --dry-run    # preview what would be backed up
+./backup.sh --help       # show all options
 ```
 
 Creates a timestamped folder under `backups/`:
 
 ```
-backups/workspace-backup-2026-02-19/
+backups/workspace-backup-2026-02-19-143022/
 ├── RESTORE-GUIDE.md
 ├── manifest.json
 ├── backup.sh / restore.sh
@@ -38,10 +40,15 @@ backups/workspace-backup-2026-02-19/
 └── volta/
 ```
 
+Project paths, Conductor workspaces, and Volta packages are auto-discovered at runtime — no hardcoded lists to maintain.
+
 ### Restore (on target Mac)
 
 ```bash
-bash restore.sh /path/to/workspace-backup-2026-02-19
+bash restore.sh /path/to/workspace-backup-2026-02-19-143022
+bash restore.sh --dry-run /path/to/backup    # preview without writing
+bash restore.sh -y /path/to/backup           # skip confirmation prompt
+bash restore.sh --help                       # show all options
 ```
 
 The restore script handles:
@@ -51,6 +58,8 @@ The restore script handles:
 4. Cloning repos and recreating Conductor worktrees
 5. Applying uncommitted change patches
 6. Restoring the Conductor database
+
+Before overwriting existing files (`.zshrc`, `.gitconfig`, SSH keys, etc.), the restore script saves them as `*.pre-restore` backups.
 
 ### After restore
 

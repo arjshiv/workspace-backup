@@ -4,15 +4,15 @@ Backup and restore scripts for migrating a full AI dev environment (Claude Code,
 
 ## Structure
 
-- `backup.sh` — Runs on the source Mac. Produces a self-contained backup folder under `backups/` with all configs, history, workspace metadata, and a restore script.
-- `restore.sh` — Runs on the target Mac. Installs prerequisites (Homebrew packages, Volta, Oh-My-Zsh, Rust), restores all configs, re-creates Conductor git worktrees, and applies uncommitted change patches.
+- `backup.sh` — Runs on the source Mac. Auto-discovers project configs, Conductor workspaces, and Volta packages. Produces a self-contained backup folder under `backups/` with all configs, history, workspace metadata, and a restore script. Supports `--dry-run` and `--help`.
+- `restore.sh` — Runs on the target Mac. Installs prerequisites (Homebrew packages, Volta, Oh-My-Zsh, Rust), restores all configs, re-creates Conductor git worktrees, and applies uncommitted change patches. Saves existing files as `*.pre-restore` before overwriting. Supports `--dry-run`, `--yes`/`-y`, and `--help`.
 - `backups/` — Gitignored output directory where backup folders land.
 
 ## Key design decisions
 
 - Conductor worktrees are NOT backed up as full git clones (13GB+). Instead, each worktree is captured as a JSON manifest (branch, commit, remote) + a `git diff` patch for uncommitted changes + a tar of untracked files + `.env` files. Restore re-clones the parent repo and recreates worktrees via `git worktree add`.
 - Homebrew state is captured via `brew bundle dump` (Brewfile) and restored via `brew bundle install`.
-- Volta global packages are listed in `global-packages.json` and reinstalled on restore.
+- Volta global packages are dynamically captured from `volta list all` and reinstalled on restore. Falls back to a hardcoded list if Volta is unavailable.
 - Skill symlinks (`~/.claude/skills/remotion-best-practices` -> `~/.agents/skills/...`) are resolved to real files during backup and recreated as symlinks during restore.
 - Sensitive files (SSH keys, OAuth tokens, .env files) get `chmod 600` in the backup. The script warns to encrypt before uploading to cloud storage.
 
