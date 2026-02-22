@@ -89,7 +89,7 @@ warn() {
 }
 
 CURRENT_STEP=0
-TOTAL_STEPS=9
+TOTAL_STEPS=11
 
 step() {
   CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -262,6 +262,27 @@ safe_cp "$BACKUP_DIR/shell-env/inshellisense/key-bindings.zsh" "$HOME/.inshellis
 if [ -f "$BACKUP_DIR/shell-env/github-copilot.tar.gz" ]; then
   safe_mkdir "$HOME/.config"
   safe_tar -xzf "$BACKUP_DIR/shell-env/github-copilot.tar.gz" -C "$HOME/.config/" 2>/dev/null || true
+fi
+
+# AWS CLI config
+if [ -d "$BACKUP_DIR/shell-env/aws" ]; then
+  safe_mkdir "$HOME/.aws"
+  if [ -f "$BACKUP_DIR/shell-env/aws/config" ]; then
+    pre_restore_backup "$HOME/.aws/config"
+    safe_cp "$BACKUP_DIR/shell-env/aws/config" "$HOME/.aws/" 2>/dev/null || warn "Failed to restore AWS config"
+  fi
+  if [ -f "$BACKUP_DIR/shell-env/aws/credentials" ]; then
+    pre_restore_backup "$HOME/.aws/credentials"
+    safe_cp "$BACKUP_DIR/shell-env/aws/credentials" "$HOME/.aws/" 2>/dev/null || warn "Failed to restore AWS credentials"
+    safe_chmod 600 "$HOME/.aws/credentials" 2>/dev/null || true
+  fi
+fi
+
+# npmrc
+if [ -f "$BACKUP_DIR/shell-env/npmrc" ]; then
+  pre_restore_backup "$HOME/.npmrc"
+  safe_cp "$BACKUP_DIR/shell-env/npmrc" "$HOME/.npmrc" 2>/dev/null || warn "Failed to restore .npmrc"
+  safe_chmod 600 "$HOME/.npmrc" 2>/dev/null || true
 fi
 
 echo "  Shell config restored."
@@ -654,6 +675,111 @@ else
 fi
 
 # ============================================================
+# STEP 10: CURSOR IDE
+# ============================================================
+step "Restoring Cursor IDE settings"
+
+if [ ! -d "$BACKUP_DIR/cursor-ide" ]; then
+  echo "  No cursor-ide directory in backup — skipping."
+else
+  CURSOR_USER_DIR="$HOME/Library/Application Support/Cursor/User"
+  safe_mkdir "$CURSOR_USER_DIR"
+
+  # Settings and keybindings
+  for f in settings.json keybindings.json; do
+    if [ -f "$BACKUP_DIR/cursor-ide/$f" ]; then
+      pre_restore_backup "$CURSOR_USER_DIR/$f"
+      safe_cp "$BACKUP_DIR/cursor-ide/$f" "$CURSOR_USER_DIR/" 2>/dev/null || warn "Failed to restore Cursor $f"
+    fi
+  done
+
+  # Snippets directory
+  if [ -d "$BACKUP_DIR/cursor-ide/snippets" ]; then
+    safe_mkdir "$CURSOR_USER_DIR/snippets"
+    safe_cp -R "$BACKUP_DIR/cursor-ide/snippets/"* "$CURSOR_USER_DIR/snippets/" 2>/dev/null || true
+  fi
+
+  # Extensions
+  if [ -f "$BACKUP_DIR/cursor-ide/extensions.txt" ]; then
+    if $DRY_RUN; then
+      ext_count=$(wc -l < "$BACKUP_DIR/cursor-ide/extensions.txt" | tr -d ' ')
+      echo "  [dry-run] Would install $ext_count Cursor extensions"
+    elif command -v cursor &>/dev/null; then
+      echo "  Installing Cursor extensions..."
+      while IFS= read -r ext; do
+        [ -z "$ext" ] && continue
+        cursor --install-extension "$ext" 2>/dev/null || warn "Failed to install Cursor extension: $ext"
+      done < "$BACKUP_DIR/cursor-ide/extensions.txt"
+    else
+      echo "  Cursor CLI not found. Install extensions manually:"
+      echo "    cat $BACKUP_DIR/cursor-ide/extensions.txt | xargs -L1 cursor --install-extension"
+    fi
+  fi
+
+  echo "  Cursor IDE restored."
+fi
+
+# ============================================================
+# STEP 11: DESKTOP APPS (iTerm2, Warp, Rectangle, Fonts)
+# ============================================================
+step "Restoring desktop app preferences"
+
+if [ ! -d "$BACKUP_DIR/desktop-apps" ]; then
+  echo "  No desktop-apps directory in backup — skipping."
+else
+  # iTerm2
+  if [ -f "$BACKUP_DIR/desktop-apps/iterm2-plist.xml" ]; then
+    echo "  Restoring iTerm2 preferences..."
+    pre_restore_backup "$HOME/Library/Preferences/com.googlecode.iterm2.plist"
+    safe_cp "$BACKUP_DIR/desktop-apps/iterm2-plist.xml" "$HOME/Library/Preferences/com.googlecode.iterm2.plist" 2>/dev/null || warn "Failed to restore iTerm2 plist"
+    if ! $DRY_RUN; then
+      plutil -convert binary1 "$HOME/Library/Preferences/com.googlecode.iterm2.plist" 2>/dev/null || true
+    fi
+  fi
+  if [ -d "$BACKUP_DIR/desktop-apps/DynamicProfiles" ]; then
+    safe_mkdir "$HOME/Library/Application Support/iTerm2/DynamicProfiles"
+    safe_cp -R "$BACKUP_DIR/desktop-apps/DynamicProfiles/"* "$HOME/Library/Application Support/iTerm2/DynamicProfiles/" 2>/dev/null || true
+  fi
+
+  # Warp
+  if [ -f "$BACKUP_DIR/desktop-apps/warp-plist.xml" ]; then
+    echo "  Restoring Warp preferences..."
+    # Detect which Warp plist exists on the target system
+    WARP_TARGET=""
+    if [ -f "$HOME/Library/Preferences/dev.warp.Warp-Stable.plist" ]; then
+      WARP_TARGET="$HOME/Library/Preferences/dev.warp.Warp-Stable.plist"
+    elif [ -f "$HOME/Library/Preferences/dev.warp.Warp.plist" ]; then
+      WARP_TARGET="$HOME/Library/Preferences/dev.warp.Warp.plist"
+    else
+      WARP_TARGET="$HOME/Library/Preferences/dev.warp.Warp-Stable.plist"
+    fi
+    pre_restore_backup "$WARP_TARGET"
+    safe_cp "$BACKUP_DIR/desktop-apps/warp-plist.xml" "$WARP_TARGET" 2>/dev/null || warn "Failed to restore Warp plist"
+    if ! $DRY_RUN; then
+      plutil -convert binary1 "$WARP_TARGET" 2>/dev/null || true
+    fi
+  fi
+
+  # Rectangle
+  if [ -f "$BACKUP_DIR/desktop-apps/rectangle-plist.xml" ]; then
+    echo "  Restoring Rectangle preferences..."
+    pre_restore_backup "$HOME/Library/Preferences/com.knewton.Rectangle.plist"
+    safe_cp "$BACKUP_DIR/desktop-apps/rectangle-plist.xml" "$HOME/Library/Preferences/com.knewton.Rectangle.plist" 2>/dev/null || warn "Failed to restore Rectangle plist"
+    if ! $DRY_RUN; then
+      plutil -convert binary1 "$HOME/Library/Preferences/com.knewton.Rectangle.plist" 2>/dev/null || true
+    fi
+  fi
+
+  # Fonts
+  if [ -f "$BACKUP_DIR/desktop-apps/user-fonts.tar.gz" ]; then
+    echo "  Restoring user fonts..."
+    safe_tar -xzf "$BACKUP_DIR/desktop-apps/user-fonts.tar.gz" -C "$HOME/Library/" 2>/dev/null || warn "Failed to extract user fonts"
+  fi
+
+  echo "  Desktop app preferences restored."
+fi
+
+# ============================================================
 # DONE
 # ============================================================
 ELAPSED=$SECONDS
@@ -676,13 +802,16 @@ echo ""
 echo "  2. Verify SSH key works:"
 echo "     ssh -T git@github.com"
 echo ""
-echo "  3. Install Claude Code (if not already installed):"
+echo "  3. Verify AWS CLI auth (if AWS was restored):"
+echo "     aws sts get-caller-identity"
+echo ""
+echo "  4. Install Claude Code (if not already installed):"
 echo "     npm install -g @anthropic-ai/claude-code"
 echo "     # Then run 'claude' and authenticate"
 echo ""
-echo "  4. Install Conductor app from official source"
+echo "  5. Install Conductor app from official source"
 echo ""
-echo "  5. Run 'npm install' in workspaces that need node_modules:"
+echo "  6. Run 'npm install' in workspaces that need node_modules:"
 # Find worktrees with package.json and suggest npm install
 if [ -d "$HOME/conductor/workspaces" ]; then
   while IFS= read -r pkg_json; do
@@ -691,11 +820,15 @@ if [ -d "$HOME/conductor/workspaces" ]; then
   done < <(find "$HOME/conductor/workspaces" -name "package.json" -not -path "*/node_modules/*" -maxdepth 4 2>/dev/null || true)
 fi
 echo ""
-echo "  6. Codex auth token may have expired. Re-authenticate if needed:"
+echo "  7. Codex auth token may have expired. Re-authenticate if needed:"
 echo "     codex auth"
 echo ""
-echo "  7. Launch Microsoft Edge and verify bookmarks/extensions restored"
+echo "  8. Launch Microsoft Edge and verify bookmarks/extensions restored"
 echo ""
-echo "  8. Source your shell config:"
-echo "     source ~/.zshrc"
+echo "  9. Launch Cursor and verify extensions/settings are restored"
+echo ""
+echo "  10. Restart iTerm2/Warp/Rectangle to pick up restored preferences"
+echo ""
+echo "  11. Source your shell config:"
+echo "      source ~/.zshrc"
 echo ""

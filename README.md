@@ -1,6 +1,6 @@
 # workspace-backup
 
-Backup and restore scripts for migrating a full AI dev environment between Macs. Captures Claude Code, Codex CLI, and Conductor state into a single portable folder.
+Backup and restore scripts for migrating a full AI dev environment between Macs. Captures Claude Code, Codex CLI, Conductor, Microsoft Edge, Cursor IDE, and Desktop Apps state into a single portable folder.
 
 ## What gets backed up
 
@@ -10,8 +10,10 @@ Backup and restore scripts for migrating a full AI dev environment between Macs.
 | **Codex CLI** | Config, rules, auth, sessions, skills, history | ~89MB → ~25MB |
 | **Conductor** | Worktree metadata + patches (not full clones), SQLite DB, archived contexts | ~13GB → ~100MB |
 | **Homebrew** | Full Brewfile (taps, formulae, casks) | ~5KB |
-| **Shell** | .zshrc, .gitconfig, SSH keys, GitHub CLI config | ~10KB |
+| **Shell** | .zshrc, .gitconfig, SSH keys, GitHub CLI config, AWS config, .npmrc | ~10KB |
 | **Volta** | Global package manifest (node, npm, CLIs) | ~5KB |
+| **Cursor IDE** | Settings, keybindings, snippets, extension list | ~5KB |
+| **Desktop Apps** | iTerm2, Warp, Rectangle preferences, user fonts | ~10KB |
 
 Conductor worktrees are captured as JSON manifests + `git diff` patches + untracked file archives — not as 13GB of git clones. The restore script re-clones from remotes and recreates worktrees.
 
@@ -37,7 +39,9 @@ backups/workspace-backup-2026-02-19-143022/
 ├── conductor/
 ├── homebrew/
 ├── shell-env/
-└── volta/
+├── volta/
+├── cursor-ide/
+└── desktop-apps/
 ```
 
 Project paths, Conductor workspaces, and Volta packages are auto-discovered at runtime — no hardcoded lists to maintain.
@@ -58,6 +62,8 @@ The restore script handles:
 4. Cloning repos and recreating Conductor worktrees
 5. Applying uncommitted change patches
 6. Restoring the Conductor database
+7. Installing Cursor IDE extensions and restoring settings
+8. Importing Desktop Apps preferences and user fonts
 
 Before overwriting existing files (`.zshrc`, `.gitconfig`, SSH keys, etc.), the restore script saves them as `*.pre-restore` backups.
 
@@ -66,9 +72,14 @@ Before overwriting existing files (`.zshrc`, `.gitconfig`, SSH keys, etc.), the 
 A few manual steps remain:
 - `gh auth login` — authenticate GitHub CLI
 - `ssh -T git@github.com` — verify SSH
+- `aws sts get-caller-identity` — verify AWS CLI auth
 - `npm install -g @anthropic-ai/claude-code` — install Claude Code binary
 - `npm install` in any workspace that needs node_modules
 - Install Conductor app from official source
+- Launch Cursor and check that extensions loaded correctly
+- Restart terminal apps (iTerm2/Warp) to pick up restored settings
+
+See [FAQ.md](FAQ.md) for common restore issues and troubleshooting.
 
 ## Sensitive files
 

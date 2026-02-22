@@ -1,6 +1,6 @@
 # workspace-backup
 
-Backup and restore scripts for migrating a full AI dev environment (Claude Code, Codex CLI, Conductor, Microsoft Edge) between Macs.
+Backup and restore scripts for migrating a full AI dev environment (Claude Code, Codex CLI, Conductor, Microsoft Edge, Cursor IDE, Desktop Apps) between Macs.
 
 ## Structure
 
@@ -15,7 +15,10 @@ Backup and restore scripts for migrating a full AI dev environment (Claude Code,
 - Volta global packages are dynamically captured from `volta list all` and reinstalled on restore. Falls back to a hardcoded list if Volta is unavailable.
 - Skill symlinks (`~/.claude/skills/remotion-best-practices` -> `~/.agents/skills/...`) are resolved to real files during backup and recreated as symlinks during restore.
 - Microsoft Edge profiles are backed up per-profile: individual files (Bookmarks, Preferences, History, etc.) plus tar.gz archives for directories (Sessions, Extensions, Collections). Cookies, Login Data, caches, and Service Workers are excluded. Restore warns strongly if Edge is running.
-- Sensitive files (SSH keys, OAuth tokens, .env files, browser history) get `chmod 600` in the backup. The script warns to encrypt before uploading to cloud storage.
+- Cursor IDE settings, keybindings, and snippets are copied from `~/Library/Application Support/Cursor/User/`. The extension list is captured via `cursor --list-extensions` when the CLI is available, falling back to reading directory names from `~/.cursor/extensions/`. Restore reinstalls extensions via `cursor --install-extension`.
+- Desktop Apps (iTerm2, Warp, Rectangle) preferences are exported as XML plists via `plutil -convert xml1`. User fonts are archived as a tar.gz from `~/Library/Fonts/`. Each app is independently optional — missing apps are skipped without error.
+- AWS credentials (`~/.aws/`) and npm config (`~/.npmrc`) are included in the shell-env backup with `chmod 600` applied to sensitive files.
+- Sensitive files (SSH keys, OAuth tokens, .env files, browser history, AWS credentials, .npmrc) get `chmod 600` in the backup. The script warns to encrypt before uploading to cloud storage.
 
 ## Adding a new backup section
 

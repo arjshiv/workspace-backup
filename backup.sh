@@ -24,7 +24,7 @@ NC='\033[0m'
 
 # --- Step counter ---
 CURRENT_STEP=0
-TOTAL_STEPS=15
+TOTAL_STEPS=17
 
 warn() {
   echo -e "  ${YELLOW}WARN:${NC} $1"
@@ -119,9 +119,10 @@ run_cmd mkdir -p "$BACKUP_DIR"/{claude-code/skills,claude-code-project-configs}
 run_cmd mkdir -p "$BACKUP_DIR"/codex-cli/{rules,skills,sqlite}
 run_cmd mkdir -p "$BACKUP_DIR"/shared-agents
 run_cmd mkdir -p "$BACKUP_DIR"/conductor/workspaces
-run_cmd mkdir -p "$BACKUP_DIR"/shell-env/{ssh,gh,inshellisense}
+run_cmd mkdir -p "$BACKUP_DIR"/shell-env/{ssh,gh,inshellisense,aws}
 run_cmd mkdir -p "$BACKUP_DIR"/volta
 run_cmd mkdir -p "$BACKUP_DIR"/edge-browser
+run_cmd mkdir -p "$BACKUP_DIR"/{cursor-ide,desktop-apps}
 
 # ============================================================
 # CLAUDE CODE
@@ -515,6 +516,13 @@ if [ -d "$HOME/.config/github-copilot" ]; then
   fi
 fi
 
+# AWS CLI
+copy_if_exists "$HOME/.aws/config" "$BACKUP_DIR/shell-env/aws/"
+copy_if_exists "$HOME/.aws/credentials" "$BACKUP_DIR/shell-env/aws/"
+
+# npm global config
+copy_if_exists "$HOME/.npmrc" "$BACKUP_DIR/shell-env/npmrc"
+
 echo "  Shell config done."
 
 # ============================================================
@@ -696,6 +704,120 @@ fi
 echo "  Microsoft Edge done."
 
 # ============================================================
+# CURSOR IDE
+# ============================================================
+step "Backing up Cursor IDE settings"
+
+CURSOR_HOME="$HOME/Library/Application Support/Cursor"
+
+if [ ! -d "$CURSOR_HOME/User" ]; then
+  warn "Cursor IDE not installed or no User dir — skipping"
+else
+  copy_if_exists "$CURSOR_HOME/User/settings.json" "$BACKUP_DIR/cursor-ide/"
+  copy_if_exists "$CURSOR_HOME/User/keybindings.json" "$BACKUP_DIR/cursor-ide/"
+
+  if [ -d "$CURSOR_HOME/User/snippets" ]; then
+    if ! $DRY_RUN; then
+      cp -R "$CURSOR_HOME/User/snippets" "$BACKUP_DIR/cursor-ide/" 2>/dev/null || warn "Failed to copy Cursor snippets"
+    else
+      echo "  [dry-run] cp -R $CURSOR_HOME/User/snippets $BACKUP_DIR/cursor-ide/"
+    fi
+  fi
+
+  # Extension list via CLI
+  if command -v cursor &>/dev/null; then
+    if ! $DRY_RUN; then
+      cursor --list-extensions > "$BACKUP_DIR/cursor-ide/extensions.txt" 2>/dev/null || warn "Failed to list Cursor extensions via CLI"
+    else
+      echo "  [dry-run] cursor --list-extensions > extensions.txt"
+    fi
+  elif [ -d "$HOME/.cursor/extensions" ]; then
+    # Fallback: derive extension list from directory names
+    if ! $DRY_RUN; then
+      ls -1 "$HOME/.cursor/extensions/" > "$BACKUP_DIR/cursor-ide/extensions.txt" 2>/dev/null || warn "Failed to list Cursor extensions from directory"
+    else
+      echo "  [dry-run] ls ~/.cursor/extensions/ > extensions.txt"
+    fi
+  else
+    warn "Cannot list Cursor extensions — CLI not in PATH and ~/.cursor/extensions not found"
+  fi
+fi
+
+echo "  Cursor IDE done."
+
+# ============================================================
+# DESKTOP APPS
+# ============================================================
+step "Backing up desktop app preferences"
+
+# iTerm2
+if [ -f "$HOME/Library/Preferences/com.googlecode.iterm2.plist" ]; then
+  if ! $DRY_RUN; then
+    plutil -convert xml1 -o "$BACKUP_DIR/desktop-apps/iterm2-plist.xml" \
+      "$HOME/Library/Preferences/com.googlecode.iterm2.plist" 2>/dev/null || warn "Failed to export iTerm2 plist"
+  else
+    echo "  [dry-run] plutil -convert xml1 iTerm2 plist"
+  fi
+  if [ -d "$HOME/Library/Application Support/iTerm2/DynamicProfiles" ]; then
+    if ! $DRY_RUN; then
+      cp -R "$HOME/Library/Application Support/iTerm2/DynamicProfiles" "$BACKUP_DIR/desktop-apps/" 2>/dev/null || warn "Failed to copy iTerm2 DynamicProfiles"
+    else
+      echo "  [dry-run] cp -R iTerm2/DynamicProfiles"
+    fi
+  fi
+  echo "  iTerm2 preferences backed up."
+else
+  echo "  iTerm2 not found — skipping"
+fi
+
+# Warp
+WARP_PLIST=""
+if [ -f "$HOME/Library/Preferences/dev.warp.Warp-Stable.plist" ]; then
+  WARP_PLIST="$HOME/Library/Preferences/dev.warp.Warp-Stable.plist"
+elif [ -f "$HOME/Library/Preferences/dev.warp.Warp.plist" ]; then
+  WARP_PLIST="$HOME/Library/Preferences/dev.warp.Warp.plist"
+fi
+
+if [ -n "$WARP_PLIST" ]; then
+  if ! $DRY_RUN; then
+    plutil -convert xml1 -o "$BACKUP_DIR/desktop-apps/warp-plist.xml" \
+      "$WARP_PLIST" 2>/dev/null || warn "Failed to export Warp plist"
+  else
+    echo "  [dry-run] plutil -convert xml1 Warp plist"
+  fi
+  echo "  Warp preferences backed up."
+else
+  echo "  Warp not found — skipping"
+fi
+
+# Rectangle
+if [ -f "$HOME/Library/Preferences/com.knewton.Rectangle.plist" ]; then
+  if ! $DRY_RUN; then
+    plutil -convert xml1 -o "$BACKUP_DIR/desktop-apps/rectangle-plist.xml" \
+      "$HOME/Library/Preferences/com.knewton.Rectangle.plist" 2>/dev/null || warn "Failed to export Rectangle plist"
+  else
+    echo "  [dry-run] plutil -convert xml1 Rectangle plist"
+  fi
+  echo "  Rectangle preferences backed up."
+else
+  echo "  Rectangle not found — skipping"
+fi
+
+# User Fonts
+if [ -d "$HOME/Library/Fonts" ] && [ "$(ls -A "$HOME/Library/Fonts" 2>/dev/null)" ]; then
+  if ! $DRY_RUN; then
+    tar -czf "$BACKUP_DIR/desktop-apps/user-fonts.tar.gz" -C "$HOME/Library" Fonts/ 2>/dev/null || warn "Failed to archive user fonts"
+  else
+    echo "  [dry-run] tar -czf user-fonts.tar.gz"
+  fi
+  echo "  User fonts backed up."
+else
+  echo "  No user fonts found — skipping"
+fi
+
+echo "  Desktop apps done."
+
+# ============================================================
 # MANIFEST
 # ============================================================
 step "Generating manifest"
@@ -723,7 +845,9 @@ if ! $DRY_RUN; then
     "shell_env": "$(du -sh "$BACKUP_DIR/shell-env" 2>/dev/null | cut -f1)",
     "homebrew": "$(du -sh "$BACKUP_DIR/homebrew" 2>/dev/null | cut -f1)",
     "volta": "$(du -sh "$BACKUP_DIR/volta" 2>/dev/null | cut -f1)",
-    "edge_browser": "$(du -sh "$BACKUP_DIR/edge-browser" 2>/dev/null | cut -f1)"
+    "edge_browser": "$(du -sh "$BACKUP_DIR/edge-browser" 2>/dev/null | cut -f1)",
+    "cursor_ide": "$(du -sh "$BACKUP_DIR/cursor-ide" 2>/dev/null | cut -f1)",
+    "desktop_apps": "$(du -sh "$BACKUP_DIR/desktop-apps" 2>/dev/null | cut -f1)"
   }
 }
 MANIFEST
@@ -796,10 +920,24 @@ Browser profiles including bookmarks, settings, extensions, history, collections
 Each profile is stored as individual files + tar.gz archives for directories.
 Excludes cookies, login data, caches, and service workers.
 
+### Cursor IDE
+- **settings.json**: Editor settings and preferences
+- **keybindings.json**: Custom keyboard shortcuts
+- **snippets/**: User-defined code snippets
+- **extensions.txt**: List of installed extensions (via CLI or directory listing)
+
+### Desktop Apps
+- **iTerm2**: Preferences plist (XML) + DynamicProfiles
+- **Warp**: Preferences plist (XML)
+- **Rectangle**: Preferences plist (XML)
+- **User Fonts**: \`~/Library/Fonts/\` archive (tar.gz)
+
 ## SENSITIVE FILES
 - \`codex-cli/auth.json\` — OAuth JWT + refresh tokens
 - \`shell-env/ssh/id_ed25519\` — SSH private key
 - \`shell-env/gh/hosts.yml\` — GitHub CLI auth
+- \`shell-env/aws/credentials\` — AWS access keys and secrets
+- \`shell-env/npmrc\` — npm registry auth tokens
 - \`conductor/workspaces/**/*.env\` — Application secrets
 - \`edge-browser/*/History\` — Browsing history
 - \`edge-browser/*/Web Data\` — Autofill and form data
@@ -835,6 +973,8 @@ if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/codex-cli/auth.json" 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/shell-env/ssh/id_ed25519" 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/shell-env/gh/hosts.yml" 2>/dev/null || true
+  chmod 600 "$BACKUP_DIR/shell-env/aws/credentials" 2>/dev/null || true
+  chmod 600 "$BACKUP_DIR/shell-env/npmrc" 2>/dev/null || true
   find "$BACKUP_DIR/conductor/workspaces" -name "*.env" -exec chmod 600 {} \; 2>/dev/null || true
   find "$BACKUP_DIR/edge-browser" -name "History" -exec chmod 600 {} \; 2>/dev/null || true
   find "$BACKUP_DIR/edge-browser" -name "Web Data" -exec chmod 600 {} \; 2>/dev/null || true
@@ -871,6 +1011,8 @@ if ! $DRY_RUN; then
   echo "    - Codex OAuth tokens (codex-cli/auth.json)"
   echo "    - .env files with API keys (conductor/workspaces/**/*.env)"
   echo "    - GitHub CLI auth (shell-env/gh/hosts.yml)"
+  echo "    - AWS credentials (shell-env/aws/credentials)"
+  echo "    - npm auth tokens (shell-env/npmrc)"
   echo "    - Edge browsing history and form data (edge-browser/*/History, Web Data)"
   echo ""
   echo -e "  ${RED}ENCRYPT BEFORE UPLOADING TO GOOGLE DRIVE.${NC}"
