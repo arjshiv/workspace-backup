@@ -1,6 +1,6 @@
 # workspace-backup
 
-Backup and restore scripts for migrating a full AI dev environment (Claude Code, Codex CLI, Conductor) between Macs.
+Backup and restore scripts for migrating a full AI dev environment (Claude Code, Codex CLI, Conductor, Microsoft Edge) between Macs.
 
 ## Structure
 
@@ -14,7 +14,8 @@ Backup and restore scripts for migrating a full AI dev environment (Claude Code,
 - Homebrew state is captured via `brew bundle dump` (Brewfile) and restored via `brew bundle install`.
 - Volta global packages are dynamically captured from `volta list all` and reinstalled on restore. Falls back to a hardcoded list if Volta is unavailable.
 - Skill symlinks (`~/.claude/skills/remotion-best-practices` -> `~/.agents/skills/...`) are resolved to real files during backup and recreated as symlinks during restore.
-- Sensitive files (SSH keys, OAuth tokens, .env files) get `chmod 600` in the backup. The script warns to encrypt before uploading to cloud storage.
+- Microsoft Edge profiles are backed up per-profile: individual files (Bookmarks, Preferences, History, etc.) plus tar.gz archives for directories (Sessions, Extensions, Collections). Cookies, Login Data, caches, and Service Workers are excluded. Restore warns strongly if Edge is running.
+- Sensitive files (SSH keys, OAuth tokens, .env files, browser history) get `chmod 600` in the backup. The script warns to encrypt before uploading to cloud storage.
 
 ## Adding a new backup section
 

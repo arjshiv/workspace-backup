@@ -89,7 +89,7 @@ warn() {
 }
 
 CURRENT_STEP=0
-TOTAL_STEPS=8
+TOTAL_STEPS=9
 
 step() {
   CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -580,6 +580,80 @@ fi
 echo "  Conductor database restored."
 
 # ============================================================
+# STEP 9: MICROSOFT EDGE
+# ============================================================
+step "Restoring Microsoft Edge profiles"
+
+EDGE_HOME="$HOME/Library/Application Support/Microsoft Edge"
+
+if [ ! -d "$BACKUP_DIR/edge-browser" ]; then
+  echo "  No edge-browser directory in backup — skipping."
+else
+  # Warn if Edge is running
+  if pgrep -x "Microsoft Edge" >/dev/null 2>&1; then
+    echo ""
+    echo -e "  ${RED}WARNING: Microsoft Edge is currently running.${NC}"
+    echo -e "  ${RED}Restoring while Edge is open can corrupt profile data.${NC}"
+    echo ""
+    if ! $SKIP_CONFIRM && ! $DRY_RUN; then
+      echo -e "  ${YELLOW}Quit Edge and press Enter to continue, or type 'skip' to skip this step:${NC}"
+      read -r edge_confirm
+      if [[ "$edge_confirm" == "skip" ]]; then
+        echo "  Skipping Edge restore."
+        EDGE_SKIP=true
+      fi
+    fi
+  fi
+
+  if [ "${EDGE_SKIP:-}" != "true" ]; then
+    safe_mkdir "$EDGE_HOME"
+
+    # Restore Local State
+    if [ -f "$BACKUP_DIR/edge-browser/Local State" ]; then
+      pre_restore_backup "$EDGE_HOME/Local State"
+      safe_cp "$BACKUP_DIR/edge-browser/Local State" "$EDGE_HOME/" 2>/dev/null || warn "Failed to restore Edge Local State"
+    fi
+
+    # Restore each profile
+    if [ -f "$BACKUP_DIR/edge-browser/profiles.json" ] && ! $DRY_RUN; then
+      profile_count=$(jq length "$BACKUP_DIR/edge-browser/profiles.json")
+    else
+      profile_count=0
+    fi
+
+    # Iterate over profile directories in the backup
+    for encoded_dir in "$BACKUP_DIR/edge-browser"/*/; do
+      [ -d "$encoded_dir" ] || continue
+      encoded_name=$(basename "$encoded_dir")
+
+      # Decode: "Profile_1" -> "Profile 1", "Default" stays "Default"
+      profile_name="${encoded_name//_/ }"
+      echo "  Restoring profile: $profile_name"
+
+      safe_mkdir "$EDGE_HOME/$profile_name"
+
+      # Restore individual files
+      for f in Bookmarks Bookmarks.bak Preferences "Secure Preferences" "Top Sites" Favicons History "Web Data"; do
+        if [ -f "$encoded_dir/$f" ]; then
+          pre_restore_backup "$EDGE_HOME/$profile_name/$f"
+          safe_cp "$encoded_dir/$f" "$EDGE_HOME/$profile_name/" 2>/dev/null || true
+        fi
+      done
+
+      # Extract tar.gz archives
+      for archive in Sessions Extensions Collections; do
+        if [ -f "$encoded_dir/${archive}.tar.gz" ]; then
+          echo "    Extracting $archive..."
+          safe_tar -xzf "$encoded_dir/${archive}.tar.gz" -C "$EDGE_HOME/$profile_name/" 2>/dev/null || warn "Failed to extract $profile_name/$archive"
+        fi
+      done
+    done
+
+    echo "  Microsoft Edge profiles restored."
+  fi
+fi
+
+# ============================================================
 # DONE
 # ============================================================
 ELAPSED=$SECONDS
@@ -620,6 +694,8 @@ echo ""
 echo "  6. Codex auth token may have expired. Re-authenticate if needed:"
 echo "     codex auth"
 echo ""
-echo "  7. Source your shell config:"
+echo "  7. Launch Microsoft Edge and verify bookmarks/extensions restored"
+echo ""
+echo "  8. Source your shell config:"
 echo "     source ~/.zshrc"
 echo ""

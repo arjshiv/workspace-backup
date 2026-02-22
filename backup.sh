@@ -10,6 +10,7 @@ CODEX_HOME="$HOME/.codex"
 CONDUCTOR_HOME="$HOME/conductor"
 CONDUCTOR_APP_SUPPORT="$HOME/Library/Application Support/com.conductor.app"
 AGENTS_HOME="$HOME/.agents"
+EDGE_HOME="$HOME/Library/Application Support/Microsoft Edge"
 WARN_COUNT=0
 LOG_FILE=""
 DRY_RUN=false
@@ -23,7 +24,7 @@ NC='\033[0m'
 
 # --- Step counter ---
 CURRENT_STEP=0
-TOTAL_STEPS=14
+TOTAL_STEPS=15
 
 warn() {
   echo -e "  ${YELLOW}WARN:${NC} $1"
@@ -120,6 +121,7 @@ run_cmd mkdir -p "$BACKUP_DIR"/shared-agents
 run_cmd mkdir -p "$BACKUP_DIR"/conductor/workspaces
 run_cmd mkdir -p "$BACKUP_DIR"/shell-env/{ssh,gh,inshellisense}
 run_cmd mkdir -p "$BACKUP_DIR"/volta
+run_cmd mkdir -p "$BACKUP_DIR"/edge-browser
 
 # ============================================================
 # CLAUDE CODE
@@ -607,6 +609,93 @@ fi
 echo "  Volta manifest done."
 
 # ============================================================
+# MICROSOFT EDGE
+# ============================================================
+step "Backing up Microsoft Edge profiles"
+
+if [ ! -d "$EDGE_HOME" ]; then
+  warn "Microsoft Edge not installed — skipping"
+else
+  # Warn if Edge is running
+  if pgrep -x "Microsoft Edge" >/dev/null 2>&1; then
+    warn "Microsoft Edge is running — backup may miss in-flight data"
+  fi
+
+  # Copy top-level Local State
+  copy_if_exists "$EDGE_HOME/Local State" "$BACKUP_DIR/edge-browser/"
+
+  # Auto-discover profiles (Default + Profile *)
+  edge_profiles=()
+  for profile_dir in "$EDGE_HOME"/Default "$EDGE_HOME"/Profile\ *; do
+    [ -d "$profile_dir" ] && edge_profiles+=("$profile_dir")
+  done
+
+  if [ ${#edge_profiles[@]} -eq 0 ]; then
+    warn "No Edge profiles found"
+  else
+    # Files to copy per profile (exclude cookies, login data, caches)
+    EDGE_PROFILE_FILES=(
+      "Bookmarks" "Bookmarks.bak" "Preferences" "Secure Preferences"
+      "Top Sites" "Favicons" "History" "Web Data"
+    )
+    # Directories to tar.gz per profile
+    EDGE_PROFILE_DIRS=("Sessions" "Extensions" "Collections")
+
+    profiles_json="["
+    first_profile=true
+
+    for profile_path in "${edge_profiles[@]}"; do
+      profile_name=$(basename "$profile_path")
+      # Encode spaces: "Profile 1" -> "Profile_1" for filesystem safety
+      encoded_name="${profile_name// /_}"
+      echo "  Processing profile: $profile_name"
+
+      run_cmd mkdir -p "$BACKUP_DIR/edge-browser/$encoded_name"
+
+      # Copy individual files
+      for f in "${EDGE_PROFILE_FILES[@]}"; do
+        if [ -f "$profile_path/$f" ]; then
+          run_cmd cp "$profile_path/$f" "$BACKUP_DIR/edge-browser/$encoded_name/"
+        fi
+      done
+
+      # Tar directories
+      for d in "${EDGE_PROFILE_DIRS[@]}"; do
+        if [ -d "$profile_path/$d" ]; then
+          if ! $DRY_RUN; then
+            tar -czf "$BACKUP_DIR/edge-browser/$encoded_name/${d}.tar.gz" \
+              -C "$profile_path" "$d/" 2>/dev/null || warn "Failed to archive $profile_name/$d"
+          else
+            echo "  [dry-run] tar -czf $BACKUP_DIR/edge-browser/$encoded_name/${d}.tar.gz ..."
+          fi
+        fi
+      done
+
+      # Build profiles.json entry
+      if $first_profile; then
+        first_profile=false
+      else
+        profiles_json+=","
+      fi
+      profiles_json+="{\"name\":\"$profile_name\",\"encoded\":\"$encoded_name\"}"
+    done
+
+    profiles_json+="]"
+
+    # Write profiles.json
+    if ! $DRY_RUN; then
+      echo "$profiles_json" | jq '.' > "$BACKUP_DIR/edge-browser/profiles.json"
+    else
+      echo "  [dry-run] Would write edge-browser/profiles.json"
+    fi
+
+    echo "  Backed up ${#edge_profiles[@]} Edge profile(s)."
+  fi
+fi
+
+echo "  Microsoft Edge done."
+
+# ============================================================
 # MANIFEST
 # ============================================================
 step "Generating manifest"
@@ -633,7 +722,8 @@ if ! $DRY_RUN; then
     "conductor": "$(du -sh "$BACKUP_DIR/conductor" 2>/dev/null | cut -f1)",
     "shell_env": "$(du -sh "$BACKUP_DIR/shell-env" 2>/dev/null | cut -f1)",
     "homebrew": "$(du -sh "$BACKUP_DIR/homebrew" 2>/dev/null | cut -f1)",
-    "volta": "$(du -sh "$BACKUP_DIR/volta" 2>/dev/null | cut -f1)"
+    "volta": "$(du -sh "$BACKUP_DIR/volta" 2>/dev/null | cut -f1)",
+    "edge_browser": "$(du -sh "$BACKUP_DIR/edge-browser" 2>/dev/null | cut -f1)"
   }
 }
 MANIFEST
@@ -701,11 +791,18 @@ Each worktree has: branch/commit JSON, uncommitted changes .patch, untracked fil
 ### Volta Global Packages
 Dynamically captured from \`volta list all\`.
 
+### Microsoft Edge
+Browser profiles including bookmarks, settings, extensions, history, collections, and sessions.
+Each profile is stored as individual files + tar.gz archives for directories.
+Excludes cookies, login data, caches, and service workers.
+
 ## SENSITIVE FILES
 - \`codex-cli/auth.json\` — OAuth JWT + refresh tokens
 - \`shell-env/ssh/id_ed25519\` — SSH private key
 - \`shell-env/gh/hosts.yml\` — GitHub CLI auth
 - \`conductor/workspaces/**/*.env\` — Application secrets
+- \`edge-browser/*/History\` — Browsing history
+- \`edge-browser/*/Web Data\` — Autofill and form data
 
 **Encrypt this folder before uploading to cloud storage.**
 
@@ -739,6 +836,8 @@ if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/shell-env/ssh/id_ed25519" 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/shell-env/gh/hosts.yml" 2>/dev/null || true
   find "$BACKUP_DIR/conductor/workspaces" -name "*.env" -exec chmod 600 {} \; 2>/dev/null || true
+  find "$BACKUP_DIR/edge-browser" -name "History" -exec chmod 600 {} \; 2>/dev/null || true
+  find "$BACKUP_DIR/edge-browser" -name "Web Data" -exec chmod 600 {} \; 2>/dev/null || true
 else
   echo "  [dry-run] Would chmod 600 sensitive files"
 fi
@@ -772,6 +871,7 @@ if ! $DRY_RUN; then
   echo "    - Codex OAuth tokens (codex-cli/auth.json)"
   echo "    - .env files with API keys (conductor/workspaces/**/*.env)"
   echo "    - GitHub CLI auth (shell-env/gh/hosts.yml)"
+  echo "    - Edge browsing history and form data (edge-browser/*/History, Web Data)"
   echo ""
   echo -e "  ${RED}ENCRYPT BEFORE UPLOADING TO GOOGLE DRIVE.${NC}"
   echo "  Example: zip -er workspace-backup.zip $BACKUP_DIR"
