@@ -22,9 +22,10 @@ Conductor worktrees are captured as JSON manifests + `git diff` patches + untrac
 ### Backup (on source Mac)
 
 ```bash
-./backup.sh              # full backup
-./backup.sh --dry-run    # preview what would be backed up
-./backup.sh --help       # show all options
+./backup.sh                          # full backup
+./backup.sh --dry-run                # preview what would be backed up
+./backup.sh --resume-from=homebrew   # resume from a specific step
+./backup.sh --help                   # show all options
 ```
 
 Creates a timestamped folder under `backups/`:
@@ -33,6 +34,7 @@ Creates a timestamped folder under `backups/`:
 backups/workspace-backup-2026-02-19-143022/
 ├── RESTORE-GUIDE.md
 ├── manifest.json
+├── results.json          # machine-readable step status
 ├── backup.sh / restore.sh
 ├── claude-code/
 ├── codex-cli/
@@ -50,9 +52,10 @@ Project paths, Conductor workspaces, and Volta packages are auto-discovered at r
 
 ```bash
 bash restore.sh /path/to/workspace-backup-2026-02-19-143022
-bash restore.sh --dry-run /path/to/backup    # preview without writing
-bash restore.sh -y /path/to/backup           # skip confirmation prompt
-bash restore.sh --help                       # show all options
+bash restore.sh --dry-run /path/to/backup               # preview without writing
+bash restore.sh -y /path/to/backup                      # skip confirmation prompt
+bash restore.sh --resume-from=edge /path/to/backup      # resume from a specific step
+bash restore.sh --help                                  # show all options
 ```
 
 The restore script handles:
@@ -80,6 +83,27 @@ A few manual steps remain:
 - Restart terminal apps (iTerm2/Warp) to pick up restored settings
 
 See [FAQ.md](FAQ.md) for common restore issues and troubleshooting.
+
+## results.json (agent self-healing)
+
+Both scripts produce a `results.json` in the backup directory with structured per-step status. This enables a Claude Code agent to diagnose failures, fix root causes, and re-run from the failed step.
+
+Exit codes: `0` = all steps completed, `1` = one or more steps failed, `2` = preflight check failed.
+
+Each step in results.json includes a status (`completed`, `failed`, `skipped`) and any errors with a category:
+
+| Category | Meaning | Agent action |
+|----------|---------|-------------|
+| `transient` | Network timeout, brew flake | Retry with `--resume-from=STEP` |
+| `permanent` | Missing dir, corrupt file | Fix root cause, then retry |
+| `user_action` | Edge running, auth expired | Ask the user |
+
+Use `--resume-from=STEP` to skip already-completed steps on retry:
+
+```bash
+./backup.sh --resume-from=homebrew    # re-run from step 9 onwards
+bash restore.sh --resume-from=edge /path/to/backup
+```
 
 ## Sensitive files
 
