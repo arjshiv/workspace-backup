@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 SECONDS=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,10 +26,144 @@ NC='\033[0m'
 CURRENT_STEP=0
 TOTAL_STEPS=17
 
+# --- Results JSON infrastructure ---
+RESULTS_FILE=""
+CURRENT_STEP_ID=0
+CURRENT_STEP_NAME=""
+CURRENT_STEP_ERRORS=""
+CURRENT_STEP_WARNINGS=""
+RESUME_FROM=""
+RESUME_FROM_ID=0
+
+init_results() {
+  RESULTS_FILE="$1"
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  cat > "$RESULTS_FILE" << INITJSON
+{
+  "script": "backup.sh",
+  "started_at": "$now",
+  "finished_at": null,
+  "exit_code": null,
+  "preflight": {"passed": true, "checks": []},
+  "steps": [],
+  "validation": {"passed": true, "checks": []},
+  "summary": {"total_steps": $TOTAL_STEPS, "completed": 0, "failed": 0, "skipped": 0, "warnings": 0}
+}
+INITJSON
+}
+
+add_preflight_check() {
+  local name="$1" status="$2" detail="${3:-}"
+  [ -z "$RESULTS_FILE" ] && return
+  local entry
+  if [ -n "$detail" ]; then
+    entry="{\"name\":\"$name\",\"status\":\"$status\",\"detail\":\"$detail\"}"
+  else
+    entry="{\"name\":\"$name\",\"status\":\"$status\"}"
+  fi
+  local tmp="${RESULTS_FILE}.tmp"
+  jq --argjson check "$entry" '.preflight.checks += [$check]' "$RESULTS_FILE" > "$tmp" && mv "$tmp" "$RESULTS_FILE"
+}
+
+set_preflight_failed() {
+  [ -z "$RESULTS_FILE" ] && return
+  local tmp="${RESULTS_FILE}.tmp"
+  jq '.preflight.passed = false' "$RESULTS_FILE" > "$tmp" && mv "$tmp" "$RESULTS_FILE"
+}
+
+begin_step() {
+  local id="$1" name="$2" label="$3"
+  CURRENT_STEP_ID="$id"
+  CURRENT_STEP_NAME="$name"
+  CURRENT_STEP_ERRORS="[]"
+  CURRENT_STEP_WARNINGS="[]"
+
+  # Handle --resume-from: skip steps before the resume point
+  if [ "$RESUME_FROM_ID" -gt 0 ] && [ "$id" -lt "$RESUME_FROM_ID" ]; then
+    # Record as skipped in results.json
+    if [ -n "$RESULTS_FILE" ]; then
+      local tmp="${RESULTS_FILE}.tmp"
+      jq --argjson s "{\"id\":$id,\"name\":\"$name\",\"status\":\"skipped\",\"errors\":[],\"warnings\":[]}" \
+        '.steps += [$s] | .summary.skipped += 1' "$RESULTS_FILE" > "$tmp" && mv "$tmp" "$RESULTS_FILE"
+    fi
+    return 1  # Signal caller to skip this step
+  fi
+
+  step "$label"
+  return 0
+}
+
+end_step() {
+  [ -z "$RESULTS_FILE" ] && return
+  local status="completed"
+  local err_count
+  err_count=$(echo "$CURRENT_STEP_ERRORS" | jq 'length')
+  if [ "$err_count" -gt 0 ]; then
+    status="failed"
+  fi
+
+  local warn_count
+  warn_count=$(echo "$CURRENT_STEP_WARNINGS" | jq 'length')
+
+  local tmp="${RESULTS_FILE}.tmp"
+  jq --argjson s "{\"id\":$CURRENT_STEP_ID,\"name\":\"$CURRENT_STEP_NAME\",\"status\":\"$status\",\"errors\":$CURRENT_STEP_ERRORS,\"warnings\":$CURRENT_STEP_WARNINGS}" \
+    --arg st "$status" \
+    '.steps += [$s] | if $st == "completed" then .summary.completed += 1 else .summary.failed += 1 end | .summary.warnings += ($s.warnings | length)' \
+    "$RESULTS_FILE" > "$tmp" && mv "$tmp" "$RESULTS_FILE"
+}
+
+record_error() {
+  local code="$1" msg="$2" category="$3" suggestion="${4:-}"
+  local entry
+  if [ -n "$suggestion" ]; then
+    entry=$(jq -n --arg c "$code" --arg m "$msg" --arg cat "$category" --arg s "$suggestion" \
+      '{code: $c, message: $m, category: $cat, suggestion: $s}')
+  else
+    entry=$(jq -n --arg c "$code" --arg m "$msg" --arg cat "$category" \
+      '{code: $c, message: $m, category: $cat}')
+  fi
+  CURRENT_STEP_ERRORS=$(echo "$CURRENT_STEP_ERRORS" | jq --argjson e "$entry" '. += [$e]')
+}
+
+record_warning() {
+  local code="$1" msg="$2" category="${3:-transient}"
+  local entry
+  entry=$(jq -n --arg c "$code" --arg m "$msg" --arg cat "$category" \
+    '{code: $c, message: $m, category: $cat}')
+  CURRENT_STEP_WARNINGS=$(echo "$CURRENT_STEP_WARNINGS" | jq --argjson e "$entry" '. += [$e]')
+}
+
+add_validation_check() {
+  local name="$1" status="$2" detail="${3:-}"
+  [ -z "$RESULTS_FILE" ] && return
+  local entry
+  if [ -n "$detail" ]; then
+    entry="{\"name\":\"$name\",\"status\":\"$status\",\"detail\":\"$detail\"}"
+  else
+    entry="{\"name\":\"$name\",\"status\":\"$status\"}"
+  fi
+  local tmp="${RESULTS_FILE}.tmp"
+  jq --argjson check "$entry" '.validation.checks += [$check]' "$RESULTS_FILE" > "$tmp" && mv "$tmp" "$RESULTS_FILE"
+  if [ "$status" != "ok" ]; then
+    jq '.validation.passed = false' "$RESULTS_FILE" > "$tmp" && mv "$tmp" "$RESULTS_FILE"
+  fi
+}
+
+finalize_results() {
+  local code="${1:-$?}"
+  [ -z "$RESULTS_FILE" ] && return
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local tmp="${RESULTS_FILE}.tmp"
+  jq --arg t "$now" --argjson c "$code" '.finished_at = $t | .exit_code = $c' "$RESULTS_FILE" > "$tmp" && mv "$tmp" "$RESULTS_FILE"
+}
+
 warn() {
   echo -e "  ${YELLOW}WARN:${NC} $1"
   WARN_COUNT=$((WARN_COUNT + 1))
   [ -n "$LOG_FILE" ] && echo "WARN: $1" >> "$LOG_FILE"
+  record_warning "WARN" "$1" "transient"
 }
 
 step() {
@@ -65,8 +199,14 @@ Back up your full AI dev environment (Claude Code, Codex CLI, Conductor)
 to a self-contained folder under backups/.
 
 Options:
-  --help      Show this help message and exit
-  --dry-run   Print what would be done without writing anything
+  --help                Show this help message and exit
+  --dry-run             Print what would be done without writing anything
+  --resume-from=STEP    Resume from a named step, skipping earlier ones.
+                        Step names: create_dirs, claude_code, project_configs,
+                        codex_cli, shared_agents, conductor_worktrees,
+                        conductor_db, shell_env, homebrew, volta, edge,
+                        cursor_ide, desktop_apps, manifest, restore_guide,
+                        copy_scripts, permissions
 
 Prerequisites:
   - macOS with Homebrew installed
@@ -77,6 +217,9 @@ Output:
   backups/workspace-backup-YYYY-MM-DD-HHMMSS/
     Containing configs, history, worktree metadata, restore scripts,
     and a RESTORE-GUIDE.md describing the contents.
+
+  results.json is written alongside the backup with machine-readable
+  status for each step (for agent self-healing).
 HELPTEXT
   exit 0
 }
@@ -85,13 +228,92 @@ for arg in "$@"; do
   case "$arg" in
     --help|-h) show_help ;;
     --dry-run) DRY_RUN=true ;;
+    --resume-from=*) RESUME_FROM="${arg#*=}" ;;
     *) echo "Unknown option: $arg"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
 done
 
+# Resolve --resume-from step name to numeric ID
+if [ -n "$RESUME_FROM" ]; then
+  case "$RESUME_FROM" in
+    create_dirs)          RESUME_FROM_ID=1 ;;
+    claude_code)          RESUME_FROM_ID=2 ;;
+    project_configs)      RESUME_FROM_ID=3 ;;
+    codex_cli)            RESUME_FROM_ID=4 ;;
+    shared_agents)        RESUME_FROM_ID=5 ;;
+    conductor_worktrees)  RESUME_FROM_ID=6 ;;
+    conductor_db)         RESUME_FROM_ID=7 ;;
+    shell_env)            RESUME_FROM_ID=8 ;;
+    homebrew)             RESUME_FROM_ID=9 ;;
+    volta)                RESUME_FROM_ID=10 ;;
+    edge)                 RESUME_FROM_ID=11 ;;
+    cursor_ide)           RESUME_FROM_ID=12 ;;
+    desktop_apps)         RESUME_FROM_ID=13 ;;
+    manifest)             RESUME_FROM_ID=14 ;;
+    restore_guide)        RESUME_FROM_ID=15 ;;
+    copy_scripts)         RESUME_FROM_ID=16 ;;
+    permissions)          RESUME_FROM_ID=17 ;;
+    *) echo "Unknown step name: $RESUME_FROM"; echo "Try 'backup.sh --help'"; exit 1 ;;
+  esac
+fi
+
 if $DRY_RUN; then
   echo -e "${YELLOW}DRY RUN MODE — no files will be written${NC}"
 fi
+
+# --- EXIT trap ---
+exit_code=0
+trap 'finalize_results ${exit_code:-$?}' EXIT
+
+# --- Initialize results.json (dry-run uses SCRIPT_DIR) ---
+if $DRY_RUN; then
+  init_results "$SCRIPT_DIR/results.json"
+fi
+
+# --- Preflight checks ---
+echo ""
+echo -e "${BOLD}Running preflight checks...${NC}"
+preflight_ok=true
+
+# Required tools
+for tool in jq git tar; do
+  if command -v "$tool" &>/dev/null; then
+    add_preflight_check "$tool" "ok"
+  else
+    add_preflight_check "$tool" "fail" "$tool is required but not found"
+    set_preflight_failed
+    preflight_ok=false
+    echo -e "  ${RED}FAIL:${NC} $tool is required but not found"
+  fi
+done
+
+# Optional tools
+for tool in plutil sqlite3 brew volta cursor; do
+  if command -v "$tool" &>/dev/null; then
+    add_preflight_check "$tool" "ok"
+  else
+    add_preflight_check "$tool" "skip" "$tool not found (optional)"
+    echo -e "  ${YELLOW}SKIP:${NC} $tool not found (optional)"
+  fi
+done
+
+# Disk space
+avail_mb=$(df -m "$SCRIPT_DIR" | awk 'NR==2{print $4}')
+if [ "$avail_mb" -ge 500 ]; then
+  add_preflight_check "disk_space" "ok" "${avail_mb}MB available"
+else
+  add_preflight_check "disk_space" "fail" "Only ${avail_mb}MB available, need 500MB"
+  set_preflight_failed
+  preflight_ok=false
+  echo -e "  ${RED}FAIL:${NC} Only ${avail_mb}MB available, need 500MB"
+fi
+
+if ! $preflight_ok; then
+  echo -e "${RED}Preflight checks failed. Aborting.${NC}"
+  exit_code=2
+  exit 2
+fi
+echo -e "  ${GREEN}All preflight checks passed.${NC}"
 
 # --- Safety checks ---
 if [ -d "$BACKUP_DIR" ]; then
@@ -101,16 +323,13 @@ if [ -d "$BACKUP_DIR" ]; then
   rm -rf "$BACKUP_DIR"
 fi
 
-avail_mb=$(df -m "$SCRIPT_DIR" | awk 'NR==2{print $4}')
-if [ "$avail_mb" -lt 500 ]; then
-  echo -e "${RED}ERROR: Less than 500MB free. Need space for backup.${NC}"
-  exit 1
-fi
-
 # --- Create directory structure ---
-step "Creating backup directory structure"
+if begin_step 1 "create_dirs" "Creating backup directory structure"; then
+
 run_cmd mkdir -p "$BACKUP_DIR"
 if ! $DRY_RUN; then
+  # Initialize results.json inside backup dir (non-dry-run)
+  init_results "$BACKUP_DIR/results.json"
   LOG_FILE="$BACKUP_DIR/backup.log"
   echo "Backup started at $(date)" > "$LOG_FILE"
 fi
@@ -124,10 +343,13 @@ run_cmd mkdir -p "$BACKUP_DIR"/volta
 run_cmd mkdir -p "$BACKUP_DIR"/edge-browser
 run_cmd mkdir -p "$BACKUP_DIR"/{cursor-ide,desktop-apps}
 
+end_step
+fi
+
 # ============================================================
 # CLAUDE CODE
 # ============================================================
-step "Backing up Claude Code"
+if begin_step 2 "claude_code" "Backing up Claude Code"; then
 
 # Small files
 for f in CLAUDE.md settings.json config.json history.jsonl stats-cache.json; do
@@ -160,10 +382,13 @@ fi
 
 echo "  Claude Code done."
 
+end_step
+fi
+
 # ============================================================
 # PROJECT-SPECIFIC .claude DIRS
 # ============================================================
-step "Backing up project-specific Claude configs"
+if begin_step 3 "project_configs" "Backing up project-specific Claude configs"; then
 
 # Auto-discover project paths by finding .claude directories
 declare -A PROJECT_PATHS
@@ -202,7 +427,7 @@ for key in "${!PROJECT_PATHS[@]}"; do
   if [ -d "$src" ]; then
     run_cmd mkdir -p "$BACKUP_DIR/claude-code-project-configs/$key"
     if ! $DRY_RUN; then
-      cp -R "$src/"* "$BACKUP_DIR/claude-code-project-configs/$key/" 2>/dev/null || true
+      cp -R "$src/"* "$BACKUP_DIR/claude-code-project-configs/$key/" 2>/dev/null || record_warning "COPY_PROJECT" "Failed to copy some files from $key" "transient"
     fi
     echo "  Backed up: $key"
   else
@@ -210,10 +435,13 @@ for key in "${!PROJECT_PATHS[@]}"; do
   fi
 done
 
+end_step
+fi
+
 # ============================================================
 # CODEX CLI
 # ============================================================
-step "Backing up Codex CLI"
+if begin_step 4 "codex_cli" "Backing up Codex CLI"; then
 
 for f in config.json config.toml instructions.md auth.json history.json history.jsonl \
          .codex-global-state.json version.json update-check.json; do
@@ -229,7 +457,7 @@ if [ -d "$CODEX_HOME/skills/.system" ]; then
 fi
 if [ -e "$CODEX_HOME/skills/remotion-best-practices" ]; then
   if ! $DRY_RUN; then
-    cp -RL "$CODEX_HOME/skills/remotion-best-practices" "$BACKUP_DIR/codex-cli/skills/" 2>/dev/null || true
+    cp -RL "$CODEX_HOME/skills/remotion-best-practices" "$BACKUP_DIR/codex-cli/skills/" 2>/dev/null || record_warning "COPY_SKILL" "Failed to copy codex remotion skill" "transient"
   else
     echo "  [dry-run] cp -RL $CODEX_HOME/skills/remotion-best-practices ..."
   fi
@@ -252,10 +480,13 @@ done
 
 echo "  Codex CLI done."
 
+end_step
+fi
+
 # ============================================================
 # SHARED AGENTS
 # ============================================================
-step "Backing up shared agents"
+if begin_step 5 "shared_agents" "Backing up shared agents"; then
 
 if [ -d "$AGENTS_HOME" ]; then
   if ! $DRY_RUN; then
@@ -273,10 +504,13 @@ else
   warn "No ~/.agents/ directory found"
 fi
 
+end_step
+fi
+
 # ============================================================
 # CONDUCTOR — WORKTREE METADATA
 # ============================================================
-step "Backing up Conductor workspaces"
+if begin_step 6 "conductor_worktrees" "Backing up Conductor workspaces"; then
 
 backup_worktrees() {
   local project_name="$1"
@@ -313,9 +547,9 @@ INFOJSON
 
   # Backup stash patches
   if [ "$stash_count" -gt 0 ]; then
-    git -C "$main_repo" stash list > "$backup_ws_dir/_stash-list.txt" 2>/dev/null || true
+    git -C "$main_repo" stash list > "$backup_ws_dir/_stash-list.txt" 2>/dev/null || record_warning "STASH_LIST" "Failed to list stashes for $project_name" "transient"
     for i in $(seq 0 $((stash_count - 1))); do
-      git -C "$main_repo" stash show -p "stash@{$i}" > "$backup_ws_dir/_stash-${i}.patch" 2>/dev/null || true
+      git -C "$main_repo" stash show -p "stash@{$i}" > "$backup_ws_dir/_stash-${i}.patch" 2>/dev/null || record_warning "STASH_PATCH" "Failed to export stash $i for $project_name" "transient"
     done
     echo "  Saved $stash_count stash patches"
   fi
@@ -374,7 +608,7 @@ WSJSON
 
     # .context dir backup
     if [ -d "$ws/.context" ]; then
-      tar -czf "$backup_ws_dir/${name}-context.tar.gz" -C "$ws" .context/ 2>/dev/null || true
+      tar -czf "$backup_ws_dir/${name}-context.tar.gz" -C "$ws" .context/ 2>/dev/null || record_warning "CONTEXT_TAR" "Failed to archive .context for $name" "transient"
     fi
 
     echo "  $name: $branch @ ${commit:0:7}"
@@ -438,10 +672,13 @@ if ! $conductor_found; then
   warn "No Conductor workspaces found"
 fi
 
+end_step
+fi
+
 # ============================================================
 # CONDUCTOR — DATABASE & APP DATA
 # ============================================================
-step "Backing up Conductor database"
+if begin_step 7 "conductor_db" "Backing up Conductor database"; then
 
 if $DRY_RUN; then
   echo "  [dry-run] Would back up conductor.db and related files"
@@ -459,7 +696,7 @@ else
   fi
 
   # WAL file
-  cp "$CONDUCTOR_APP_SUPPORT/conductor.db-wal" "$BACKUP_DIR/conductor/" 2>/dev/null || true
+  cp "$CONDUCTOR_APP_SUPPORT/conductor.db-wal" "$BACKUP_DIR/conductor/" 2>/dev/null || record_warning "WAL_COPY" "WAL file not found (normal if DB was idle)" "transient"
 
   # Plist
   if [ -f "$HOME/Library/Preferences/com.conductor.app.plist" ]; then
@@ -475,21 +712,24 @@ else
 
   # Context trash
   if [ -d "$CONDUCTOR_HOME/.context-trash" ]; then
-    tar -czf "$BACKUP_DIR/conductor/context-trash.tar.gz" -C "$CONDUCTOR_HOME" .context-trash/ 2>/dev/null || true
+    tar -czf "$BACKUP_DIR/conductor/context-trash.tar.gz" -C "$CONDUCTOR_HOME" .context-trash/ 2>/dev/null || record_warning "TRASH_TAR" "Failed to archive context trash" "transient"
   fi
 
   # dbtools
   if [ -d "$CONDUCTOR_HOME/dbtools" ]; then
-    cp -R "$CONDUCTOR_HOME/dbtools" "$BACKUP_DIR/conductor/" 2>/dev/null || true
+    cp -R "$CONDUCTOR_HOME/dbtools" "$BACKUP_DIR/conductor/" 2>/dev/null || record_warning "DBTOOLS_COPY" "Failed to copy dbtools" "transient"
   fi
 fi
 
 echo "  Conductor database done."
 
+end_step
+fi
+
 # ============================================================
 # SHELL & ENVIRONMENT
 # ============================================================
-step "Backing up shell and environment config"
+if begin_step 8 "shell_env" "Backing up shell and environment config"; then
 
 copy_if_exists "$HOME/.zshrc" "$BACKUP_DIR/shell-env/zshrc"
 copy_if_exists "$HOME/.profile" "$BACKUP_DIR/shell-env/profile"
@@ -510,7 +750,7 @@ copy_if_exists "$HOME/.inshellisense/key-bindings.zsh" "$BACKUP_DIR/shell-env/in
 # GitHub Copilot
 if [ -d "$HOME/.config/github-copilot" ]; then
   if ! $DRY_RUN; then
-    tar -czf "$BACKUP_DIR/shell-env/github-copilot.tar.gz" -C "$HOME/.config" github-copilot/ 2>/dev/null || true
+    tar -czf "$BACKUP_DIR/shell-env/github-copilot.tar.gz" -C "$HOME/.config" github-copilot/ 2>/dev/null || record_warning "COPILOT_TAR" "Failed to archive github-copilot" "transient"
   else
     echo "  [dry-run] tar -czf ... github-copilot/"
   fi
@@ -525,18 +765,21 @@ copy_if_exists "$HOME/.npmrc" "$BACKUP_DIR/shell-env/npmrc"
 
 echo "  Shell config done."
 
+end_step
+fi
+
 # ============================================================
 # HOMEBREW
 # ============================================================
 BREW_START=$SECONDS
-step "Backing up Homebrew package list"
+if begin_step 9 "homebrew" "Backing up Homebrew package list"; then
 
 run_cmd mkdir -p "$BACKUP_DIR/homebrew"
 if command -v brew &>/dev/null; then
   if ! $DRY_RUN; then
     brew bundle dump --file="$BACKUP_DIR/homebrew/Brewfile" --force 2>/dev/null || warn "Failed to dump Brewfile"
-    brew list --versions > "$BACKUP_DIR/homebrew/brew-list.txt" 2>/dev/null || true
-    brew list --cask --versions > "$BACKUP_DIR/homebrew/brew-cask-list.txt" 2>/dev/null || true
+    brew list --versions > "$BACKUP_DIR/homebrew/brew-list.txt" 2>/dev/null || record_warning "BREW_LIST" "Failed to list brew packages" "transient"
+    brew list --cask --versions > "$BACKUP_DIR/homebrew/brew-cask-list.txt" 2>/dev/null || record_warning "BREW_CASK" "Failed to list brew casks" "transient"
   else
     echo "  [dry-run] brew bundle dump / brew list"
   fi
@@ -546,14 +789,17 @@ else
 fi
 echo "  Homebrew section took $((SECONDS - BREW_START))s"
 
+end_step
+fi
+
 # ============================================================
 # VOLTA
 # ============================================================
-step "Backing up Volta package manifest"
+if begin_step 10 "volta" "Backing up Volta package manifest"; then
 
 if ! $DRY_RUN; then
   if command -v volta &>/dev/null; then
-    volta list all --format=plain 2>/dev/null > "$BACKUP_DIR/volta/volta-list-all.txt" || true
+    volta list all --format=plain 2>/dev/null > "$BACKUP_DIR/volta/volta-list-all.txt" || record_warning "VOLTA_LIST" "Failed to list volta packages" "transient"
 
     # Build global-packages.json dynamically from volta output
     node_ver=$(volta list node --format=plain 2>/dev/null | awk '{print $2; exit}' || echo "")
@@ -616,10 +862,13 @@ fi
 
 echo "  Volta manifest done."
 
+end_step
+fi
+
 # ============================================================
 # MICROSOFT EDGE
 # ============================================================
-step "Backing up Microsoft Edge profiles"
+if begin_step 11 "edge" "Backing up Microsoft Edge profiles"; then
 
 if [ ! -d "$EDGE_HOME" ]; then
   warn "Microsoft Edge not installed — skipping"
@@ -703,10 +952,13 @@ fi
 
 echo "  Microsoft Edge done."
 
+end_step
+fi
+
 # ============================================================
 # CURSOR IDE
 # ============================================================
-step "Backing up Cursor IDE settings"
+if begin_step 12 "cursor_ide" "Backing up Cursor IDE settings"; then
 
 CURSOR_HOME="$HOME/Library/Application Support/Cursor"
 
@@ -745,10 +997,13 @@ fi
 
 echo "  Cursor IDE done."
 
+end_step
+fi
+
 # ============================================================
 # DESKTOP APPS
 # ============================================================
-step "Backing up desktop app preferences"
+if begin_step 13 "desktop_apps" "Backing up desktop app preferences"; then
 
 # iTerm2
 if [ -f "$HOME/Library/Preferences/com.googlecode.iterm2.plist" ]; then
@@ -817,10 +1072,13 @@ fi
 
 echo "  Desktop apps done."
 
+end_step
+fi
+
 # ============================================================
 # MANIFEST
 # ============================================================
-step "Generating manifest"
+if begin_step 14 "manifest" "Generating manifest"; then
 
 if ! $DRY_RUN; then
   backup_size=$(du -sh "$BACKUP_DIR" | cut -f1)
@@ -853,10 +1111,13 @@ if ! $DRY_RUN; then
 MANIFEST
 fi
 
+end_step
+fi
+
 # ============================================================
 # RESTORE GUIDE FOR THE BACKUP FOLDER
 # ============================================================
-step "Generating RESTORE-GUIDE.md"
+if begin_step 15 "restore_guide" "Generating RESTORE-GUIDE.md"; then
 
 CURRENT_USER=$(whoami)
 CURRENT_HOST=$(hostname)
@@ -952,10 +1213,13 @@ Prerequisites: Fresh Mac with Homebrew installed. See \`restore.sh\` for full de
 CLAUDEMD
 fi
 
+end_step
+fi
+
 # ============================================================
 # COPY SCRIPTS INTO BACKUP
 # ============================================================
-step "Copying scripts into backup"
+if begin_step 16 "copy_scripts" "Copying scripts into backup"; then
 
 run_cmd cp "$SCRIPT_DIR/backup.sh" "$BACKUP_DIR/"
 if ! $DRY_RUN; then
@@ -964,22 +1228,87 @@ else
   echo "  [dry-run] cp restore.sh"
 fi
 
+end_step
+fi
+
 # ============================================================
 # PERMISSIONS
 # ============================================================
-step "Setting permissions on sensitive files"
+if begin_step 17 "permissions" "Setting permissions on sensitive files"; then
 
 if ! $DRY_RUN; then
-  chmod 600 "$BACKUP_DIR/codex-cli/auth.json" 2>/dev/null || true
-  chmod 600 "$BACKUP_DIR/shell-env/ssh/id_ed25519" 2>/dev/null || true
-  chmod 600 "$BACKUP_DIR/shell-env/gh/hosts.yml" 2>/dev/null || true
-  chmod 600 "$BACKUP_DIR/shell-env/aws/credentials" 2>/dev/null || true
-  chmod 600 "$BACKUP_DIR/shell-env/npmrc" 2>/dev/null || true
+  chmod 600 "$BACKUP_DIR/codex-cli/auth.json" 2>/dev/null || record_warning "CHMOD" "auth.json not found for chmod" "transient"
+  chmod 600 "$BACKUP_DIR/shell-env/ssh/id_ed25519" 2>/dev/null || record_warning "CHMOD" "SSH key not found for chmod" "transient"
+  chmod 600 "$BACKUP_DIR/shell-env/gh/hosts.yml" 2>/dev/null || record_warning "CHMOD" "gh hosts.yml not found for chmod" "transient"
+  chmod 600 "$BACKUP_DIR/shell-env/aws/credentials" 2>/dev/null || record_warning "CHMOD" "AWS credentials not found for chmod" "transient"
+  chmod 600 "$BACKUP_DIR/shell-env/npmrc" 2>/dev/null || record_warning "CHMOD" "npmrc not found for chmod" "transient"
   find "$BACKUP_DIR/conductor/workspaces" -name "*.env" -exec chmod 600 {} \; 2>/dev/null || true
   find "$BACKUP_DIR/edge-browser" -name "History" -exec chmod 600 {} \; 2>/dev/null || true
   find "$BACKUP_DIR/edge-browser" -name "Web Data" -exec chmod 600 {} \; 2>/dev/null || true
 else
   echo "  [dry-run] Would chmod 600 sensitive files"
+fi
+
+end_step
+fi
+
+# ============================================================
+# VALIDATION
+# ============================================================
+echo ""
+echo -e "${BOLD}Running post-backup validation...${NC}"
+
+if ! $DRY_RUN; then
+  # Check manifest.json exists and is valid JSON
+  if [ -f "$BACKUP_DIR/manifest.json" ]; then
+    if jq empty "$BACKUP_DIR/manifest.json" 2>/dev/null; then
+      add_validation_check "manifest_json" "ok"
+    else
+      add_validation_check "manifest_json" "fail" "manifest.json is not valid JSON"
+    fi
+  else
+    add_validation_check "manifest_json" "fail" "manifest.json not found"
+  fi
+
+  # Check critical directories exist
+  for crit_dir in claude-code shell-env conductor; do
+    if [ -d "$BACKUP_DIR/$crit_dir" ]; then
+      add_validation_check "dir_${crit_dir}" "ok"
+    else
+      add_validation_check "dir_${crit_dir}" "fail" "$crit_dir directory missing"
+    fi
+  done
+
+  # Check file count > 10
+  val_file_count=$(find "$BACKUP_DIR" -type f | wc -l | tr -d ' ')
+  if [ "$val_file_count" -gt 10 ]; then
+    add_validation_check "file_count" "ok" "$val_file_count files"
+  else
+    add_validation_check "file_count" "fail" "Only $val_file_count files (expected >10)"
+  fi
+
+  # Check if validation passed
+  if [ -n "$RESULTS_FILE" ]; then
+    val_passed=$(jq -r '.validation.passed' "$RESULTS_FILE" 2>/dev/null || echo "true")
+    if [ "$val_passed" = "false" ]; then
+      echo -e "  ${RED}Validation failed — see results.json for details${NC}"
+      exit_code=1
+    else
+      echo -e "  ${GREEN}All validation checks passed.${NC}"
+    fi
+  fi
+else
+  echo -e "  ${YELLOW}(skipped in dry-run mode)${NC}"
+fi
+
+# ============================================================
+# DETERMINE EXIT CODE
+# ============================================================
+if [ -n "$RESULTS_FILE" ] && [ -f "$RESULTS_FILE" ]; then
+  failed_count=$(jq -r '.summary.failed' "$RESULTS_FILE" 2>/dev/null || echo "0")
+  if [ "$failed_count" -gt 0 ]; then
+    exit_code=1
+  fi
 fi
 
 # ============================================================
@@ -1020,3 +1349,5 @@ if ! $DRY_RUN; then
   echo ""
   echo "Backup finished at $(date)" >> "$LOG_FILE"
 fi
+
+exit "$exit_code"
