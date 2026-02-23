@@ -171,7 +171,7 @@ DRY_RUN=false
 BACKUP_DIR=""
 
 usage() {
-  echo "Usage: bash restore.sh [OPTIONS] /path/to/workspace-backup-YYYY-MM-DD"
+  echo "Usage: bash restore.sh [OPTIONS] /path/to/backup-dir-or-encrypted.zip"
   echo ""
   echo "Restore a full AI dev environment from a workspace backup."
   echo ""
@@ -203,6 +203,17 @@ if [ -z "$BACKUP_DIR" ]; then
   echo "ERROR: No backup directory specified."
   echo "Run with --help for usage."
   exit 1
+fi
+
+# --- Zip detection: decrypt and extract if input is a .zip file ---
+CLEANUP_TEMP_DIR=""
+if [[ "$BACKUP_DIR" == *.zip ]] && [ -f "$BACKUP_DIR" ]; then
+  ZIP_FILE="$(cd "$(dirname "$BACKUP_DIR")" && pwd)/$(basename "$BACKUP_DIR")"
+  TEMP_DIR=$(mktemp -d)
+  echo "Decrypting and extracting $ZIP_FILE..."
+  unzip "$ZIP_FILE" -d "$TEMP_DIR" || { echo "Failed to decrypt/extract zip"; exit 1; }
+  BACKUP_DIR="$(find "$TEMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  CLEANUP_TEMP_DIR="$TEMP_DIR"
 fi
 
 BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd)"
@@ -1219,5 +1230,9 @@ echo ""
 echo "  11. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
+
+if [ -n "$CLEANUP_TEMP_DIR" ]; then
+  rm -rf "$CLEANUP_TEMP_DIR"
+fi
 
 exit $exit_code

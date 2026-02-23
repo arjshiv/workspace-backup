@@ -14,6 +14,7 @@ EDGE_HOME="$HOME/Library/Application Support/Microsoft Edge"
 WARN_COUNT=0
 LOG_FILE=""
 DRY_RUN=false
+ENCRYPT=false
 
 # --- Colors ---
 GREEN='\033[0;32m'
@@ -201,6 +202,8 @@ to a self-contained folder under backups/.
 Options:
   --help                Show this help message and exit
   --dry-run             Print what would be done without writing anything
+  --encrypt             Encrypt the backup as a password-protected .zip
+                        after completion (prompts for password)
   --resume-from=STEP    Resume from a named step, skipping earlier ones.
                         Step names: create_dirs, claude_code, project_configs,
                         codex_cli, shared_agents, conductor_worktrees,
@@ -228,6 +231,7 @@ for arg in "$@"; do
   case "$arg" in
     --help|-h) show_help ;;
     --dry-run) DRY_RUN=true ;;
+    --encrypt) ENCRYPT=true ;;
     --resume-from=*) RESUME_FROM="${arg#*=}" ;;
     *) echo "Unknown option: $arg"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
@@ -1394,7 +1398,28 @@ if [ "$WARN_COUNT" -gt 0 ] && ! $DRY_RUN; then
   echo "  See $BACKUP_DIR/backup.log for details."
   echo ""
 fi
-if ! $DRY_RUN; then
+if $ENCRYPT && ! $DRY_RUN && [ "$exit_code" -eq 0 ]; then
+  echo "Encrypting backup..."
+  BACKUP_PARENT="$(dirname "$BACKUP_DIR")"
+  BACKUP_BASENAME="$(basename "$BACKUP_DIR")"
+  ENCRYPTED_FILE="$BACKUP_PARENT/${BACKUP_BASENAME}.zip"
+  (cd "$BACKUP_PARENT" && zip -er "$ENCRYPTED_FILE" "$BACKUP_BASENAME/") || {
+    echo "Encryption failed — unencrypted backup preserved at $BACKUP_DIR"
+    exit "$exit_code"
+  }
+  rm -rf "$BACKUP_DIR"
+  echo ""
+  echo "  Encrypted: $ENCRYPTED_FILE"
+  echo "  Size:      $(du -sh "$ENCRYPTED_FILE" | cut -f1)"
+  echo ""
+  echo "  Upload this .zip to Google Drive. The unencrypted folder has been deleted."
+fi
+
+if $ENCRYPT && $DRY_RUN; then
+  echo "  [dry-run] Would encrypt backup to .zip and delete unencrypted folder"
+fi
+
+if ! $DRY_RUN && ! $ENCRYPT; then
   echo -e "  ${RED}WARNING: This backup contains SENSITIVE data:${NC}"
   echo "    - SSH private key (shell-env/ssh/id_ed25519)"
   echo "    - Codex OAuth tokens (codex-cli/auth.json)"
@@ -1407,6 +1432,9 @@ if ! $DRY_RUN; then
   echo -e "  ${RED}ENCRYPT BEFORE UPLOADING TO GOOGLE DRIVE.${NC}"
   echo "  Example: zip -er workspace-backup.zip $BACKUP_DIR"
   echo ""
+fi
+
+if ! $DRY_RUN && [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
   echo "Backup finished at $(date)" >> "$LOG_FILE"
 fi
 

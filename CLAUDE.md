@@ -4,8 +4,8 @@ Backup and restore scripts for migrating a full AI dev environment (Claude Code,
 
 ## Structure
 
-- `backup.sh` — Runs on the source Mac. Auto-discovers project configs, Conductor workspaces, and Volta packages. Produces a self-contained backup folder under `backups/` with all configs, history, workspace metadata, and a restore script. Supports `--dry-run`, `--resume-from=STEP`, and `--help`. Writes `results.json` for agent consumption.
-- `restore.sh` — Runs on the target Mac. Installs prerequisites (Homebrew packages, Volta, Oh-My-Zsh, Rust), restores all configs, re-creates Conductor git worktrees, and applies uncommitted change patches. Saves existing files as `*.pre-restore` before overwriting. Supports `--dry-run`, `--yes`/`-y`, `--resume-from=STEP`, and `--help`. Writes `results.json` for agent consumption.
+- `backup.sh` — Runs on the source Mac. Auto-discovers project configs, Conductor workspaces, and Volta packages. Produces a self-contained backup folder under `backups/` with all configs, history, workspace metadata, and a restore script. Supports `--dry-run`, `--encrypt`, `--resume-from=STEP`, and `--help`. Writes `results.json` for agent consumption.
+- `restore.sh` — Runs on the target Mac. Accepts either a backup directory or an encrypted `.zip` file. Installs prerequisites (Homebrew packages, Volta, Oh-My-Zsh, Rust), restores all configs, re-creates Conductor git worktrees, and applies uncommitted change patches. Saves existing files as `*.pre-restore` before overwriting. Supports `--dry-run`, `--yes`/`-y`, `--resume-from=STEP`, and `--help`. Writes `results.json` for agent consumption.
 - `backups/` — Gitignored output directory where backup folders land.
 
 ## Key design decisions
