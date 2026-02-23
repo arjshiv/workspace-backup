@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 SECONDS=0
 
@@ -14,6 +14,157 @@ else
   GREEN='' YELLOW='' RED='' BOLD='' NC=''
 fi
 
+# --- Results JSON infrastructure ---
+RESULTS_FILE=""
+CURRENT_STEP_ID=0
+CURRENT_STEP_NAME=""
+CURRENT_STEP_ERRORS="[]"
+CURRENT_STEP_WARNINGS="[]"
+RESUME_FROM=""
+RESUME_FROM_ID=0
+TOTAL_STEPS=11
+
+init_results() {
+  RESULTS_FILE="$1"
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  cat > "$RESULTS_FILE" << INITJSON
+{
+  "script": "restore.sh",
+  "started_at": "$now",
+  "finished_at": null,
+  "exit_code": null,
+  "preflight": {"passed": true, "checks": []},
+  "steps": [],
+  "validation": {"passed": true, "checks": []},
+  "summary": {"total_steps": $TOTAL_STEPS, "completed": 0, "failed": 0, "skipped": 0, "warnings": 0}
+}
+INITJSON
+}
+
+add_preflight_check() {
+  [ -z "$RESULTS_FILE" ] && return
+  local name="$1" status="$2" message="$3"
+  local tmp
+  tmp=$(jq \
+    --arg name "$name" \
+    --arg status "$status" \
+    --arg msg "$message" \
+    '.preflight.checks += [{"name": $name, "status": $status, "message": $msg}]' \
+    "$RESULTS_FILE") && echo "$tmp" > "$RESULTS_FILE"
+}
+
+set_preflight_failed() {
+  [ -z "$RESULTS_FILE" ] && return
+  local tmp
+  tmp=$(jq '.preflight.passed = false' "$RESULTS_FILE") && echo "$tmp" > "$RESULTS_FILE"
+}
+
+begin_step() {
+  local id="$1" name="$2" label="$3"
+  CURRENT_STEP_ID=$id
+  CURRENT_STEP_NAME="$name"
+  CURRENT_STEP_ERRORS="[]"
+  CURRENT_STEP_WARNINGS="[]"
+
+  # Resume support: skip steps before the resume point
+  if [ "$RESUME_FROM_ID" -gt 0 ] && [ "$id" -lt "$RESUME_FROM_ID" ]; then
+    echo ""
+    echo -e "${GREEN}==> [${id}/${TOTAL_STEPS}]${NC} ${BOLD}$label${NC} (skipped — resuming from $RESUME_FROM)"
+    if [ -n "$RESULTS_FILE" ]; then
+      local tmp
+      tmp=$(jq \
+        --arg name "$name" \
+        --arg label "$label" \
+        --argjson id "$id" \
+        '.steps += [{"id": $id, "name": $name, "label": $label, "status": "skipped", "errors": [], "warnings": []}] | .summary.skipped += 1' \
+        "$RESULTS_FILE") && echo "$tmp" > "$RESULTS_FILE"
+    fi
+    return 1
+  fi
+
+  echo ""
+  echo -e "${GREEN}==> [${id}/${TOTAL_STEPS}]${NC} ${BOLD}$label${NC}"
+  return 0
+}
+
+end_step() {
+  [ -z "$RESULTS_FILE" ] && return
+  local status="completed"
+  local err_count
+  err_count=$(echo "$CURRENT_STEP_ERRORS" | jq 'length')
+  if [ "$err_count" -gt 0 ]; then
+    status="failed"
+  fi
+  local tmp
+  tmp=$(jq \
+    --arg name "$CURRENT_STEP_NAME" \
+    --argjson id "$CURRENT_STEP_ID" \
+    --arg status "$status" \
+    --argjson errors "$CURRENT_STEP_ERRORS" \
+    --argjson warnings "$CURRENT_STEP_WARNINGS" \
+    '.steps += [{"id": $id, "name": $name, "status": $status, "errors": $errors, "warnings": $warnings}]
+     | if $status == "completed" then .summary.completed += 1
+       else .summary.failed += 1 end' \
+    "$RESULTS_FILE") && echo "$tmp" > "$RESULTS_FILE"
+}
+
+record_error() {
+  local code="$1" message="$2" category="${3:-permanent}" suggestion="${4:-}"
+  if [ -n "$suggestion" ]; then
+    CURRENT_STEP_ERRORS=$(echo "$CURRENT_STEP_ERRORS" | jq \
+      --arg code "$code" \
+      --arg msg "$message" \
+      --arg cat "$category" \
+      --arg sug "$suggestion" \
+      '. += [{"code": $code, "message": $msg, "category": $cat, "suggestion": $sug}]')
+  else
+    CURRENT_STEP_ERRORS=$(echo "$CURRENT_STEP_ERRORS" | jq \
+      --arg code "$code" \
+      --arg msg "$message" \
+      --arg cat "$category" \
+      '. += [{"code": $code, "message": $msg, "category": $cat}]')
+  fi
+}
+
+record_warning() {
+  local code="$1" message="$2" category="${3:-transient}"
+  CURRENT_STEP_WARNINGS=$(echo "$CURRENT_STEP_WARNINGS" | jq \
+    --arg code "$code" \
+    --arg msg "$message" \
+    --arg cat "$category" \
+    '. += [{"code": $code, "message": $msg, "category": $cat}]')
+  [ -z "$RESULTS_FILE" ] && return
+  local tmp
+  tmp=$(jq '.summary.warnings += 1' "$RESULTS_FILE") && echo "$tmp" > "$RESULTS_FILE"
+}
+
+add_validation_check() {
+  [ -z "$RESULTS_FILE" ] && return
+  local name="$1" status="$2" message="$3"
+  local tmp
+  tmp=$(jq \
+    --arg name "$name" \
+    --arg status "$status" \
+    --arg msg "$message" \
+    '.validation.checks += [{"name": $name, "status": $status, "message": $msg}]
+     | if $status == "fail" then .validation.passed = false else . end' \
+    "$RESULTS_FILE") && echo "$tmp" > "$RESULTS_FILE"
+}
+
+finalize_results() {
+  local code="${1:-0}"
+  [ -z "$RESULTS_FILE" ] && return
+  local now
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local tmp
+  tmp=$(jq \
+    --arg now "$now" \
+    --argjson code "$code" \
+    '.finished_at = $now | .exit_code = $code' \
+    "$RESULTS_FILE") && echo "$tmp" > "$RESULTS_FILE"
+}
+
 # --- Argument parsing ---
 SKIP_CONFIRM=false
 DRY_RUN=false
@@ -25,9 +176,15 @@ usage() {
   echo "Restore a full AI dev environment from a workspace backup."
   echo ""
   echo "Options:"
-  echo "  -y, --yes       Skip confirmation prompt"
-  echo "  --dry-run       Show what would be restored without writing"
-  echo "  -h, --help      Show this help message"
+  echo "  -y, --yes              Skip confirmation prompt"
+  echo "  --dry-run              Show what would be restored without writing"
+  echo "  --resume-from=STEP     Resume from a specific step (e.g. --resume-from=edge)"
+  echo "  -h, --help             Show this help message"
+  echo ""
+  echo "Steps (for --resume-from):"
+  echo "  prerequisites, shell_env, volta, claude_code, project_configs,"
+  echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
+  echo "  desktop_apps"
   exit 0
 }
 
@@ -36,6 +193,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage ;;
     -y|--yes) SKIP_CONFIRM=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --resume-from=*) RESUME_FROM="${1#*=}"; shift ;;
     -*) echo "Unknown option: $1"; echo "Run with --help for usage."; exit 1 ;;
     *) BACKUP_DIR="$1"; shift ;;
   esac
@@ -49,6 +207,29 @@ fi
 
 BACKUP_DIR="$(cd "$BACKUP_DIR" && pwd)"
 
+# --- Resolve --resume-from to step ID ---
+if [ -n "$RESUME_FROM" ]; then
+  case "$RESUME_FROM" in
+    prerequisites)        RESUME_FROM_ID=1 ;;
+    shell_env)            RESUME_FROM_ID=2 ;;
+    volta)                RESUME_FROM_ID=3 ;;
+    claude_code)          RESUME_FROM_ID=4 ;;
+    project_configs)      RESUME_FROM_ID=5 ;;
+    codex_cli)            RESUME_FROM_ID=6 ;;
+    conductor_worktrees)  RESUME_FROM_ID=7 ;;
+    conductor_db)         RESUME_FROM_ID=8 ;;
+    edge)                 RESUME_FROM_ID=9 ;;
+    cursor_ide)           RESUME_FROM_ID=10 ;;
+    desktop_apps)         RESUME_FROM_ID=11 ;;
+    *)
+      echo "ERROR: Unknown step name '$RESUME_FROM' for --resume-from"
+      echo "Valid steps: prerequisites, shell_env, volta, claude_code, project_configs,"
+      echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide, desktop_apps"
+      exit 1
+      ;;
+  esac
+fi
+
 echo -e "${BOLD}========================================${NC}"
 echo -e "${BOLD}  WORKSPACE RESTORE${NC}"
 echo -e "${BOLD}========================================${NC}"
@@ -56,6 +237,9 @@ echo ""
 echo "  Source: $BACKUP_DIR"
 if $DRY_RUN; then
   echo -e "  Mode:   ${YELLOW}DRY RUN (no files will be written)${NC}"
+fi
+if [ -n "$RESUME_FROM" ]; then
+  echo -e "  Resume: from ${BOLD}$RESUME_FROM${NC} (step $RESUME_FROM_ID)"
 fi
 echo ""
 
@@ -69,6 +253,13 @@ done
 
 echo "Backup validated."
 
+# --- Initialize results.json ---
+init_results "$BACKUP_DIR/results.json"
+
+# --- EXIT trap ---
+exit_code=0
+trap 'finalize_results ${exit_code:-$?}' EXIT
+
 # --- Confirmation prompt ---
 if ! $SKIP_CONFIRM && ! $DRY_RUN; then
   echo ""
@@ -76,6 +267,7 @@ if ! $SKIP_CONFIRM && ! $DRY_RUN; then
   read -r confirm
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo "Aborted."
+    exit_code=0
     exit 0
   fi
 fi
@@ -86,10 +278,10 @@ WARN_COUNT=0
 warn() {
   echo -e "  ${YELLOW}WARN:${NC} $1"
   WARN_COUNT=$((WARN_COUNT + 1))
+  record_warning "WARN" "$1" "transient"
 }
 
 CURRENT_STEP=0
-TOTAL_STEPS=11
 
 step() {
   CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -150,9 +342,70 @@ pre_restore_backup() {
 }
 
 # ============================================================
+# PREFLIGHT CHECKS
+# ============================================================
+echo ""
+echo -e "${BOLD}Running preflight checks...${NC}"
+preflight_ok=true
+
+# Required: jq
+if command -v jq &>/dev/null; then
+  add_preflight_check "jq" "pass" "jq is available"
+else
+  add_preflight_check "jq" "fail" "jq is not installed (required for results tracking)"
+  set_preflight_failed
+  preflight_ok=false
+fi
+
+# Required: git
+if command -v git &>/dev/null; then
+  add_preflight_check "git" "pass" "git is available"
+else
+  add_preflight_check "git" "fail" "git is not installed (required for worktree restore)"
+  set_preflight_failed
+  preflight_ok=false
+fi
+
+# Network: can reach github.com
+if curl -sf --max-time 5 https://github.com >/dev/null 2>&1; then
+  add_preflight_check "network" "pass" "Can reach github.com"
+else
+  add_preflight_check "network" "warn" "Cannot reach github.com — git clones may fail"
+  echo -e "  ${YELLOW}WARN: Cannot reach github.com — network-dependent steps may fail${NC}"
+fi
+
+# Disk space
+avail_mb=$(df -m "$HOME" 2>/dev/null | awk 'NR==2{print $4}')
+if [ -n "$avail_mb" ] && [ "$avail_mb" -ge 500 ] 2>/dev/null; then
+  add_preflight_check "disk_space" "pass" "${avail_mb}MB available"
+else
+  add_preflight_check "disk_space" "warn" "Less than 500MB available (${avail_mb:-unknown}MB)"
+  echo -e "  ${YELLOW}WARN: Low disk space — ${avail_mb:-unknown}MB available${NC}"
+fi
+
+# Backup structure valid (already checked above, but record in preflight)
+add_preflight_check "backup_structure" "pass" "Backup structure validated"
+
+# Edge not running (informational)
+if pgrep -x "Microsoft Edge" >/dev/null 2>&1; then
+  add_preflight_check "edge_not_running" "warn" "Microsoft Edge is running — profile restore may conflict"
+  echo -e "  ${YELLOW}WARN: Microsoft Edge is running — profile restore may conflict${NC}"
+else
+  add_preflight_check "edge_not_running" "pass" "Microsoft Edge is not running"
+fi
+
+if ! $preflight_ok; then
+  echo -e "${RED}Preflight checks failed. Install missing prerequisites and retry.${NC}"
+  exit_code=2
+  exit 2
+fi
+
+echo "  Preflight checks passed."
+
+# ============================================================
 # STEP 1: PREREQUISITES
 # ============================================================
-step "Checking and installing prerequisites"
+if begin_step 1 "prerequisites" "Checking and installing prerequisites"; then
 
 if $DRY_RUN; then
   echo "  [dry-run] Skipping prerequisite installs"
@@ -217,11 +470,13 @@ else
 fi
 
 echo "  Prerequisites done."
+end_step
+fi
 
 # ============================================================
 # STEP 2: SHELL & ENVIRONMENT
 # ============================================================
-step "Restoring shell and environment config"
+if begin_step 2 "shell_env" "Restoring shell and environment config"; then
 
 pre_restore_backup "$HOME/.zshrc"
 safe_cp "$BACKUP_DIR/shell-env/zshrc" "$HOME/.zshrc" 2>/dev/null || warn "Failed to restore .zshrc"
@@ -286,11 +541,13 @@ if [ -f "$BACKUP_DIR/shell-env/npmrc" ]; then
 fi
 
 echo "  Shell config restored."
+end_step
+fi
 
 # ============================================================
 # STEP 3: VOLTA PACKAGES
 # ============================================================
-step "Restoring Volta packages"
+if begin_step 3 "volta" "Restoring Volta packages"; then
 
 export VOLTA_HOME="$HOME/.volta"
 export PATH="$VOLTA_HOME/bin:$PATH"
@@ -316,11 +573,13 @@ else
 fi
 
 echo "  Volta packages restored."
+end_step
+fi
 
 # ============================================================
 # STEP 4: CLAUDE CODE
 # ============================================================
-step "Restoring Claude Code"
+if begin_step 4 "claude_code" "Restoring Claude Code"; then
 
 safe_mkdir "$HOME/.claude"
 
@@ -363,11 +622,13 @@ safe_mkdir "$HOME/.claude/debug" "$HOME/.claude/shell-snapshots" "$HOME/.claude/
   "$HOME/.claude/chrome" "$HOME/.claude/ide" "$HOME/.claude/statsig"
 
 echo "  Claude Code restored."
+end_step
+fi
 
 # ============================================================
 # STEP 5: PROJECT-SPECIFIC CLAUDE CONFIGS
 # ============================================================
-step "Restoring project-specific Claude configs"
+if begin_step 5 "project_configs" "Restoring project-specific Claude configs"; then
 
 if [ -f "$BACKUP_DIR/claude-code-project-configs/project-paths.json" ]; then
   jq -r 'to_entries[] | "\(.key)\t\(.value)"' "$BACKUP_DIR/claude-code-project-configs/project-paths.json" | \
@@ -386,10 +647,13 @@ else
   warn "No project-paths.json found"
 fi
 
+end_step
+fi
+
 # ============================================================
 # STEP 6: CODEX CLI
 # ============================================================
-step "Restoring Codex CLI"
+if begin_step 6 "codex_cli" "Restoring Codex CLI"; then
 
 safe_mkdir "$HOME/.codex/rules" "$HOME/.codex/skills" "$HOME/.codex/sqlite" \
   "$HOME/.codex/log" "$HOME/.codex/tmp" "$HOME/.codex/shell_snapshots"
@@ -429,11 +693,13 @@ done
 safe_chmod 600 "$HOME/.codex/auth.json" 2>/dev/null || true
 
 echo "  Codex CLI restored."
+end_step
+fi
 
 # ============================================================
 # STEP 7: CONDUCTOR — REPOS & WORKTREES
 # ============================================================
-step "Restoring Conductor workspaces"
+if begin_step 7 "conductor_worktrees" "Restoring Conductor workspaces"; then
 
 safe_mkdir "$HOME/conductor/workspaces" "$HOME/conductor/archived-contexts" \
   "$HOME/conductor/dbtools" "$HOME/conductor/.context-trash"
@@ -558,11 +824,13 @@ else
 fi
 
 echo "  Conductor workspaces restored."
+end_step
+fi
 
 # ============================================================
 # STEP 8: CONDUCTOR — DATABASE & APP DATA
 # ============================================================
-step "Restoring Conductor database and app data"
+if begin_step 8 "conductor_db" "Restoring Conductor database and app data"; then
 
 CONDUCTOR_APP_SUPPORT="$HOME/Library/Application Support/com.conductor.app"
 safe_mkdir "$CONDUCTOR_APP_SUPPORT"
@@ -599,11 +867,13 @@ if [ -d "$BACKUP_DIR/conductor/dbtools" ]; then
 fi
 
 echo "  Conductor database restored."
+end_step
+fi
 
 # ============================================================
 # STEP 9: MICROSOFT EDGE
 # ============================================================
-step "Restoring Microsoft Edge profiles"
+if begin_step 9 "edge" "Restoring Microsoft Edge profiles"; then
 
 EDGE_HOME="$HOME/Library/Application Support/Microsoft Edge"
 
@@ -612,17 +882,20 @@ if [ ! -d "$BACKUP_DIR/edge-browser" ]; then
 else
   # Warn if Edge is running
   if pgrep -x "Microsoft Edge" >/dev/null 2>&1; then
-    echo ""
-    echo -e "  ${RED}WARNING: Microsoft Edge is currently running.${NC}"
-    echo -e "  ${RED}Restoring while Edge is open can corrupt profile data.${NC}"
-    echo ""
     if ! $SKIP_CONFIRM && ! $DRY_RUN; then
+      echo ""
+      echo -e "  ${RED}WARNING: Microsoft Edge is currently running.${NC}"
+      echo -e "  ${RED}Restoring while Edge is open can corrupt profile data.${NC}"
+      echo ""
       echo -e "  ${YELLOW}Quit Edge and press Enter to continue, or type 'skip' to skip this step:${NC}"
       read -r edge_confirm
       if [[ "$edge_confirm" == "skip" ]]; then
         echo "  Skipping Edge restore."
         EDGE_SKIP=true
       fi
+    else
+      record_warning "EDGE_RUNNING" "Microsoft Edge is running — profile data may be overwritten on exit" "user_action"
+      warn "Edge is running — restoring anyway (--yes mode)"
     fi
   fi
 
@@ -674,10 +947,13 @@ else
   fi
 fi
 
+end_step
+fi
+
 # ============================================================
 # STEP 10: CURSOR IDE
 # ============================================================
-step "Restoring Cursor IDE settings"
+if begin_step 10 "cursor_ide" "Restoring Cursor IDE settings"; then
 
 if [ ! -d "$BACKUP_DIR/cursor-ide" ]; then
   echo "  No cursor-ide directory in backup — skipping."
@@ -719,10 +995,13 @@ else
   echo "  Cursor IDE restored."
 fi
 
+end_step
+fi
+
 # ============================================================
 # STEP 11: DESKTOP APPS (iTerm2, Warp, Rectangle, Fonts)
 # ============================================================
-step "Restoring desktop app preferences"
+if begin_step 11 "desktop_apps" "Restoring desktop app preferences"; then
 
 if [ ! -d "$BACKUP_DIR/desktop-apps" ]; then
   echo "  No desktop-apps directory in backup — skipping."
@@ -779,6 +1058,76 @@ else
   echo "  Desktop app preferences restored."
 fi
 
+end_step
+fi
+
+# ============================================================
+# POST-RESTORE VALIDATION
+# ============================================================
+echo ""
+echo -e "${BOLD}Running post-restore validation...${NC}"
+
+# ~/.claude/settings.json exists (if claude-code was in backup)
+if [ -d "$BACKUP_DIR/claude-code" ]; then
+  if [ -f "$HOME/.claude/settings.json" ]; then
+    add_validation_check "claude_settings" "pass" "~/.claude/settings.json exists"
+  else
+    add_validation_check "claude_settings" "fail" "~/.claude/settings.json is missing"
+  fi
+fi
+
+# ~/.zshrc exists
+if [ -f "$HOME/.zshrc" ]; then
+  add_validation_check "zshrc" "pass" "~/.zshrc exists"
+else
+  add_validation_check "zshrc" "fail" "~/.zshrc is missing"
+fi
+
+# SSH key perms = 600
+if [ -f "$HOME/.ssh/id_ed25519" ]; then
+  ssh_perms=$(stat -f '%Lp' "$HOME/.ssh/id_ed25519" 2>/dev/null || stat -c '%a' "$HOME/.ssh/id_ed25519" 2>/dev/null || echo "unknown")
+  if [ "$ssh_perms" = "600" ]; then
+    add_validation_check "ssh_key_perms" "pass" "SSH key permissions are 600"
+  else
+    add_validation_check "ssh_key_perms" "warn" "SSH key permissions are $ssh_perms (expected 600)"
+  fi
+else
+  add_validation_check "ssh_key_perms" "warn" "SSH key not found at ~/.ssh/id_ed25519"
+fi
+
+# volta, node, npm in PATH
+for cmd in volta node npm; do
+  if command -v "$cmd" &>/dev/null; then
+    add_validation_check "${cmd}_in_path" "pass" "$cmd is in PATH"
+  else
+    add_validation_check "${cmd}_in_path" "warn" "$cmd is not in PATH"
+  fi
+done
+
+# Conductor worktrees created (check a sample)
+if [ -d "$HOME/conductor/workspaces" ]; then
+  wt_count=$(find "$HOME/conductor/workspaces" -mindepth 2 -maxdepth 2 -name ".git" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$wt_count" -gt 0 ]; then
+    add_validation_check "conductor_worktrees" "pass" "$wt_count worktree(s) found"
+  else
+    add_validation_check "conductor_worktrees" "warn" "No worktrees found under ~/conductor/workspaces"
+  fi
+else
+  add_validation_check "conductor_worktrees" "warn" "~/conductor/workspaces does not exist"
+fi
+
+echo "  Validation complete."
+
+# ============================================================
+# SET EXIT CODE
+# ============================================================
+if [ -n "$RESULTS_FILE" ] && [ -f "$RESULTS_FILE" ]; then
+  failed_count=$(jq '.summary.failed' "$RESULTS_FILE" 2>/dev/null || echo "0")
+  if [ "$failed_count" -gt 0 ] 2>/dev/null; then
+    exit_code=1
+  fi
+fi
+
 # ============================================================
 # DONE
 # ============================================================
@@ -793,6 +1142,9 @@ echo -e "${BOLD}========================================${NC}"
 echo ""
 echo -e "  Warnings: ${WARN_COUNT}"
 echo -e "  Elapsed:  ${ELAPSED_MIN}m ${ELAPSED_SEC}s"
+if [ -n "$RESULTS_FILE" ]; then
+  echo -e "  Results:  $RESULTS_FILE"
+fi
 echo ""
 echo -e "  ${BOLD}MANUAL STEPS REMAINING:${NC}"
 echo ""
@@ -832,3 +1184,5 @@ echo ""
 echo "  11. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
+
+exit $exit_code
