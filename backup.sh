@@ -25,7 +25,7 @@ NC='\033[0m'
 
 # --- Step counter ---
 CURRENT_STEP=0
-TOTAL_STEPS=18
+TOTAL_STEPS=19
 
 # --- Results JSON infrastructure ---
 RESULTS_FILE=""
@@ -208,8 +208,8 @@ Options:
                         Step names: create_dirs, claude_code, project_configs,
                         codex_cli, shared_agents, conductor_worktrees,
                         conductor_db, shell_env, homebrew, volta, edge,
-                        cursor_ide, desktop_apps, github_repos, manifest,
-                        restore_guide, copy_scripts, permissions
+                        cursor_ide, db_tools, desktop_apps, github_repos,
+                        manifest, restore_guide, copy_scripts, permissions
 
 Prerequisites:
   - macOS with Homebrew installed
@@ -252,12 +252,13 @@ if [ -n "$RESUME_FROM" ]; then
     volta)                RESUME_FROM_ID=10 ;;
     edge)                 RESUME_FROM_ID=11 ;;
     cursor_ide)           RESUME_FROM_ID=12 ;;
-    desktop_apps)         RESUME_FROM_ID=13 ;;
-    github_repos)         RESUME_FROM_ID=14 ;;
-    manifest)             RESUME_FROM_ID=15 ;;
-    restore_guide)        RESUME_FROM_ID=16 ;;
-    copy_scripts)         RESUME_FROM_ID=17 ;;
-    permissions)          RESUME_FROM_ID=18 ;;
+    db_tools)             RESUME_FROM_ID=13 ;;
+    desktop_apps)         RESUME_FROM_ID=14 ;;
+    github_repos)         RESUME_FROM_ID=15 ;;
+    manifest)             RESUME_FROM_ID=16 ;;
+    restore_guide)        RESUME_FROM_ID=17 ;;
+    copy_scripts)         RESUME_FROM_ID=18 ;;
+    permissions)          RESUME_FROM_ID=19 ;;
     *) echo "Unknown step name: $RESUME_FROM"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
 fi
@@ -360,7 +361,7 @@ run_cmd mkdir -p "$BACKUP_DIR"/conductor/workspaces
 run_cmd mkdir -p "$BACKUP_DIR"/shell-env/{ssh,gh,inshellisense,aws}
 run_cmd mkdir -p "$BACKUP_DIR"/volta
 run_cmd mkdir -p "$BACKUP_DIR"/edge-browser
-run_cmd mkdir -p "$BACKUP_DIR"/{cursor-ide,desktop-apps,github-repos}
+run_cmd mkdir -p "$BACKUP_DIR"/{cursor-ide,db-tools/datagrip,db-tools/psql,desktop-apps,github-repos}
 
 end_step
 fi
@@ -1066,9 +1067,68 @@ end_step
 fi
 
 # ============================================================
+# DATABASE TOOLS (DataGrip + psql)
+# ============================================================
+if begin_step 13 "db_tools" "Backing up database tools config"; then
+
+# --- DataGrip ---
+DATAGRIP_BASE="$HOME/Library/Application Support/JetBrains"
+DATAGRIP_HOME=""
+if [ -d "$DATAGRIP_BASE" ]; then
+  DATAGRIP_HOME=$(ls -1d "$DATAGRIP_BASE"/DataGrip* 2>/dev/null | sort -V | tail -1)
+fi
+
+if [ -z "$DATAGRIP_HOME" ] || [ ! -d "$DATAGRIP_HOME" ]; then
+  warn "DataGrip not installed — skipping DataGrip section"
+else
+  DATAGRIP_VERSION=$(basename "$DATAGRIP_HOME")
+  echo "  Found $DATAGRIP_VERSION"
+  if ! $DRY_RUN; then
+    echo "$DATAGRIP_VERSION" > "$BACKUP_DIR/db-tools/datagrip-version.txt"
+  fi
+
+  # Directories to copy
+  for dir in options workspace consoles codestyles tasks jdbc-drivers; do
+    if [ -d "$DATAGRIP_HOME/$dir" ]; then
+      echo "  Backing up $dir..."
+      if ! $DRY_RUN; then
+        cp -R "$DATAGRIP_HOME/$dir" "$BACKUP_DIR/db-tools/datagrip/" 2>/dev/null || warn "Failed to copy DataGrip $dir"
+      else
+        echo "  [dry-run] cp -R $DATAGRIP_HOME/$dir $BACKUP_DIR/db-tools/datagrip/"
+      fi
+    fi
+  done
+
+  # Individual files
+  for f in datagrip.vmoptions datagrip.key; do
+    copy_if_exists "$DATAGRIP_HOME/$f" "$BACKUP_DIR/db-tools/datagrip/"
+  done
+fi
+
+# --- psql / PostgreSQL client ---
+echo "  Backing up psql settings..."
+copy_if_exists "$HOME/.psqlrc" "$BACKUP_DIR/db-tools/psql/psqlrc"
+copy_if_exists "$HOME/.psql_history" "$BACKUP_DIR/db-tools/psql/psql_history"
+copy_if_exists "$HOME/.pgpass" "$BACKUP_DIR/db-tools/psql/pgpass"
+copy_if_exists "$HOME/.pg_service.conf" "$BACKUP_DIR/db-tools/psql/pg_service.conf"
+
+if [ -d "$HOME/.postgresql" ]; then
+  if ! $DRY_RUN; then
+    cp -R "$HOME/.postgresql" "$BACKUP_DIR/db-tools/psql/postgresql" 2>/dev/null || warn "Failed to copy ~/.postgresql"
+  else
+    echo "  [dry-run] cp -R $HOME/.postgresql $BACKUP_DIR/db-tools/psql/postgresql"
+  fi
+fi
+
+echo "  Database tools done."
+
+end_step
+fi
+
+# ============================================================
 # DESKTOP APPS
 # ============================================================
-if begin_step 13 "desktop_apps" "Backing up desktop app preferences"; then
+if begin_step 14 "desktop_apps" "Backing up desktop app preferences"; then
 
 # iTerm2
 if [ -f "$HOME/Library/Preferences/com.googlecode.iterm2.plist" ]; then
@@ -1143,7 +1203,7 @@ fi
 # ============================================================
 # GITHUB REPOS
 # ============================================================
-if begin_step 14 "github_repos" "Backing up ~/GitHub repositories"; then
+if begin_step 15 "github_repos" "Backing up ~/GitHub repositories"; then
 
 GITHUB_DIR="$HOME/GitHub"
 if [ ! -d "$GITHUB_DIR" ]; then
@@ -1184,7 +1244,7 @@ fi
 # ============================================================
 # MANIFEST
 # ============================================================
-if begin_step 15 "manifest" "Generating manifest"; then
+if begin_step 16 "manifest" "Generating manifest"; then
 
 if ! $DRY_RUN; then
   backup_size=$(du -sh "$BACKUP_DIR" | cut -f1)
@@ -1211,6 +1271,7 @@ if ! $DRY_RUN; then
     "volta": "$(du -sh "$BACKUP_DIR/volta" 2>/dev/null | cut -f1)",
     "edge_browser": "$(du -sh "$BACKUP_DIR/edge-browser" 2>/dev/null | cut -f1)",
     "cursor_ide": "$(du -sh "$BACKUP_DIR/cursor-ide" 2>/dev/null | cut -f1)",
+    "db_tools": "$(du -sh "$BACKUP_DIR/db-tools" 2>/dev/null | cut -f1)",
     "desktop_apps": "$(du -sh "$BACKUP_DIR/desktop-apps" 2>/dev/null | cut -f1)",
     "github_repos": "$(du -sh "$BACKUP_DIR/github-repos" 2>/dev/null | cut -f1)"
   }
@@ -1224,7 +1285,7 @@ fi
 # ============================================================
 # RESTORE GUIDE FOR THE BACKUP FOLDER
 # ============================================================
-if begin_step 16 "restore_guide" "Generating RESTORE-GUIDE.md"; then
+if begin_step 17 "restore_guide" "Generating RESTORE-GUIDE.md"; then
 
 CURRENT_USER=$(whoami)
 CURRENT_HOST=$(hostname)
@@ -1295,6 +1356,10 @@ If Edge was running during backup, \`edge-browser/open-tabs.json\` contains all 
 - **snippets/**: User-defined code snippets
 - **extensions.txt**: List of installed extensions (via CLI or directory listing)
 
+### Database Tools
+- **DataGrip**: Settings (\`options/\`), data source configs (\`workspace/\`), SQL console history (\`consoles/\`), code styles, JDBC driver configs, JVM options, license key
+- **psql**: \`.psqlrc\`, \`.psql_history\`, \`.pgpass\` (sensitive), \`.pg_service.conf\`, \`~/.postgresql/\` directory
+
 ### Desktop Apps
 - **iTerm2**: Preferences plist (XML) + DynamicProfiles
 - **Warp**: Preferences plist (XML)
@@ -1311,6 +1376,8 @@ If Edge was running during backup, \`edge-browser/open-tabs.json\` contains all 
 - \`shell-env/aws/credentials\` — AWS access keys and secrets
 - \`shell-env/npmrc\` — npm registry auth tokens
 - \`conductor/workspaces/**/*.env\` — Application secrets
+- \`db-tools/datagrip/datagrip.key\` — DataGrip license key
+- \`db-tools/psql/pgpass\` — PostgreSQL passwords
 - \`edge-browser/*/History\` — Browsing history
 - \`edge-browser/*/Web Data\` — Autofill and form data
 
@@ -1330,7 +1397,7 @@ fi
 # ============================================================
 # COPY SCRIPTS INTO BACKUP
 # ============================================================
-if begin_step 17 "copy_scripts" "Copying scripts into backup"; then
+if begin_step 18 "copy_scripts" "Copying scripts into backup"; then
 
 run_cmd cp "$SCRIPT_DIR/backup.sh" "$BACKUP_DIR/"
 if ! $DRY_RUN; then
@@ -1345,7 +1412,7 @@ fi
 # ============================================================
 # PERMISSIONS
 # ============================================================
-if begin_step 18 "permissions" "Setting permissions on sensitive files"; then
+if begin_step 19 "permissions" "Setting permissions on sensitive files"; then
 
 if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/codex-cli/auth.json" 2>/dev/null || record_warning "CHMOD" "auth.json not found for chmod" "transient"
@@ -1353,6 +1420,8 @@ if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/shell-env/gh/hosts.yml" 2>/dev/null || record_warning "CHMOD" "gh hosts.yml not found for chmod" "transient"
   chmod 600 "$BACKUP_DIR/shell-env/aws/credentials" 2>/dev/null || record_warning "CHMOD" "AWS credentials not found for chmod" "transient"
   chmod 600 "$BACKUP_DIR/shell-env/npmrc" 2>/dev/null || record_warning "CHMOD" "npmrc not found for chmod" "transient"
+  chmod 600 "$BACKUP_DIR/db-tools/datagrip/datagrip.key" 2>/dev/null || record_warning "CHMOD" "DataGrip key not found for chmod" "transient"
+  chmod 600 "$BACKUP_DIR/db-tools/psql/pgpass" 2>/dev/null || record_warning "CHMOD" "pgpass not found for chmod" "transient"
   find "$BACKUP_DIR/conductor/workspaces" -name "*.env" -exec chmod 600 {} \; 2>/dev/null || true
   find "$BACKUP_DIR/edge-browser" -name "History" -exec chmod 600 {} \; 2>/dev/null || true
   find "$BACKUP_DIR/edge-browser" -name "Web Data" -exec chmod 600 {} \; 2>/dev/null || true
@@ -1474,6 +1543,8 @@ if ! $DRY_RUN && ! $ENCRYPT; then
   echo "    - GitHub CLI auth (shell-env/gh/hosts.yml)"
   echo "    - AWS credentials (shell-env/aws/credentials)"
   echo "    - npm auth tokens (shell-env/npmrc)"
+  echo "    - DataGrip license key (db-tools/datagrip/datagrip.key)"
+  echo "    - PostgreSQL passwords (db-tools/psql/pgpass)"
   echo "    - Edge browsing history and form data (edge-browser/*/History, Web Data)"
   echo ""
   echo -e "  ${RED}ENCRYPT BEFORE UPLOADING TO GOOGLE DRIVE.${NC}"

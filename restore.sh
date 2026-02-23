@@ -22,7 +22,7 @@ CURRENT_STEP_ERRORS="[]"
 CURRENT_STEP_WARNINGS="[]"
 RESUME_FROM=""
 RESUME_FROM_ID=0
-TOTAL_STEPS=12
+TOTAL_STEPS=13
 
 init_results() {
   RESULTS_FILE="$1"
@@ -184,7 +184,7 @@ usage() {
   echo "Steps (for --resume-from):"
   echo "  prerequisites, shell_env, volta, claude_code, project_configs,"
   echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
-  echo "  github_repos, desktop_apps"
+  echo "  db_tools, github_repos, desktop_apps"
   exit 0
 }
 
@@ -231,12 +231,14 @@ if [ -n "$RESUME_FROM" ]; then
     conductor_db)         RESUME_FROM_ID=8 ;;
     edge)                 RESUME_FROM_ID=9 ;;
     cursor_ide)           RESUME_FROM_ID=10 ;;
-    github_repos)         RESUME_FROM_ID=11 ;;
-    desktop_apps)         RESUME_FROM_ID=12 ;;
+    db_tools)             RESUME_FROM_ID=11 ;;
+    github_repos)         RESUME_FROM_ID=12 ;;
+    desktop_apps)         RESUME_FROM_ID=13 ;;
     *)
       echo "ERROR: Unknown step name '$RESUME_FROM' for --resume-from"
       echo "Valid steps: prerequisites, shell_env, volta, claude_code, project_configs,"
-      echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide, github_repos, desktop_apps"
+      echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
+      echo "  db_tools, github_repos, desktop_apps"
       exit 1
       ;;
   esac
@@ -1064,9 +1066,101 @@ end_step
 fi
 
 # ============================================================
-# STEP 11: GITHUB REPOS
+# STEP 11: DATABASE TOOLS (DataGrip + psql)
 # ============================================================
-if begin_step 11 "github_repos" "Restoring ~/GitHub repositories"; then
+if begin_step 11 "db_tools" "Restoring database tools config"; then
+
+if [ ! -d "$BACKUP_DIR/db-tools" ]; then
+  echo "  No db-tools directory in backup — skipping."
+else
+  # --- DataGrip ---
+  if [ -d "$BACKUP_DIR/db-tools/datagrip" ]; then
+    DATAGRIP_BASE="$HOME/Library/Application Support/JetBrains"
+
+    # Determine target version: prefer existing install, then backed-up version
+    DATAGRIP_VERSION=""
+    if [ -f "$BACKUP_DIR/db-tools/datagrip-version.txt" ]; then
+      DATAGRIP_VERSION=$(cat "$BACKUP_DIR/db-tools/datagrip-version.txt")
+    fi
+
+    EXISTING_DG=""
+    if [ -d "$DATAGRIP_BASE" ]; then
+      EXISTING_DG=$(ls -1d "$DATAGRIP_BASE"/DataGrip* 2>/dev/null | sort -V | tail -1)
+    fi
+
+    if [ -n "$EXISTING_DG" ]; then
+      DATAGRIP_HOME="$EXISTING_DG"
+      echo "  Found existing $(basename "$EXISTING_DG")"
+    elif [ -n "$DATAGRIP_VERSION" ]; then
+      DATAGRIP_HOME="$DATAGRIP_BASE/$DATAGRIP_VERSION"
+      echo "  Creating $DATAGRIP_VERSION config directory"
+    else
+      DATAGRIP_HOME="$DATAGRIP_BASE/DataGrip2025.2"
+      echo "  No version info — defaulting to DataGrip2025.2"
+    fi
+
+    safe_mkdir "$DATAGRIP_HOME"
+
+    # Restore directories
+    for dir in options workspace consoles codestyles tasks jdbc-drivers; do
+      if [ -d "$BACKUP_DIR/db-tools/datagrip/$dir" ]; then
+        echo "  Restoring DataGrip $dir..."
+        safe_mkdir "$DATAGRIP_HOME/$dir"
+        safe_cp -R "$BACKUP_DIR/db-tools/datagrip/$dir/"* "$DATAGRIP_HOME/$dir/" 2>/dev/null || warn "Failed to restore DataGrip $dir"
+      fi
+    done
+
+    # Restore individual files
+    for f in datagrip.vmoptions datagrip.key; do
+      if [ -f "$BACKUP_DIR/db-tools/datagrip/$f" ]; then
+        pre_restore_backup "$DATAGRIP_HOME/$f"
+        safe_cp "$BACKUP_DIR/db-tools/datagrip/$f" "$DATAGRIP_HOME/" 2>/dev/null || warn "Failed to restore DataGrip $f"
+      fi
+    done
+
+    safe_chmod 600 "$DATAGRIP_HOME/datagrip.key" 2>/dev/null || true
+    echo "  DataGrip settings restored."
+  else
+    echo "  No DataGrip config in backup — skipping."
+  fi
+
+  # --- psql / PostgreSQL client ---
+  if [ -d "$BACKUP_DIR/db-tools/psql" ]; then
+    echo "  Restoring psql settings..."
+    if [ -f "$BACKUP_DIR/db-tools/psql/psqlrc" ]; then
+      pre_restore_backup "$HOME/.psqlrc"
+      safe_cp "$BACKUP_DIR/db-tools/psql/psqlrc" "$HOME/.psqlrc" 2>/dev/null || warn "Failed to restore .psqlrc"
+    fi
+    if [ -f "$BACKUP_DIR/db-tools/psql/psql_history" ]; then
+      pre_restore_backup "$HOME/.psql_history"
+      safe_cp "$BACKUP_DIR/db-tools/psql/psql_history" "$HOME/.psql_history" 2>/dev/null || warn "Failed to restore .psql_history"
+    fi
+    if [ -f "$BACKUP_DIR/db-tools/psql/pgpass" ]; then
+      pre_restore_backup "$HOME/.pgpass"
+      safe_cp "$BACKUP_DIR/db-tools/psql/pgpass" "$HOME/.pgpass" 2>/dev/null || warn "Failed to restore .pgpass"
+      safe_chmod 600 "$HOME/.pgpass" 2>/dev/null || true
+    fi
+    if [ -f "$BACKUP_DIR/db-tools/psql/pg_service.conf" ]; then
+      pre_restore_backup "$HOME/.pg_service.conf"
+      safe_cp "$BACKUP_DIR/db-tools/psql/pg_service.conf" "$HOME/.pg_service.conf" 2>/dev/null || warn "Failed to restore .pg_service.conf"
+    fi
+    if [ -d "$BACKUP_DIR/db-tools/psql/postgresql" ]; then
+      safe_mkdir "$HOME/.postgresql"
+      safe_cp -R "$BACKUP_DIR/db-tools/psql/postgresql/"* "$HOME/.postgresql/" 2>/dev/null || warn "Failed to restore ~/.postgresql"
+    fi
+    echo "  psql settings restored."
+  else
+    echo "  No psql config in backup — skipping."
+  fi
+fi
+
+end_step
+fi
+
+# ============================================================
+# STEP 12: GITHUB REPOS
+# ============================================================
+if begin_step 12 "github_repos" "Restoring ~/GitHub repositories"; then
 
 if [ ! -f "$BACKUP_DIR/github-repos/github.tar.gz" ]; then
   echo "  No github-repos/github.tar.gz in backup — skipping."
@@ -1092,7 +1186,7 @@ fi
 # ============================================================
 # STEP 12: DESKTOP APPS (iTerm2, Warp, Rectangle, Fonts)
 # ============================================================
-if begin_step 12 "desktop_apps" "Restoring desktop app preferences"; then
+if begin_step 13 "desktop_apps" "Restoring desktop app preferences"; then
 
 if [ ! -d "$BACKUP_DIR/desktop-apps" ]; then
   echo "  No desktop-apps directory in backup — skipping."
@@ -1270,9 +1364,11 @@ echo "  8. Launch Microsoft Edge and verify bookmarks/extensions restored"
 echo ""
 echo "  9. Launch Cursor and verify extensions/settings are restored"
 echo ""
-echo "  10. Restart iTerm2/Warp/Rectangle to pick up restored preferences"
+echo "  10. Launch DataGrip and verify data sources and settings are restored"
 echo ""
-echo "  11. Source your shell config:"
+echo "  11. Restart iTerm2/Warp/Rectangle to pick up restored preferences"
+echo ""
+echo "  12. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
 
