@@ -892,9 +892,55 @@ if begin_step 11 "edge" "Backing up Microsoft Edge profiles"; then
 if [ ! -d "$EDGE_HOME" ]; then
   warn "Microsoft Edge not installed — skipping"
 else
-  # Warn if Edge is running
+  # Capture open tabs via AppleScript if Edge is running
   if pgrep -x "Microsoft Edge" >/dev/null 2>&1; then
     warn "Microsoft Edge is running — backup may miss in-flight data"
+    echo "  Capturing open tabs from running Edge..."
+    if ! $DRY_RUN; then
+      tabs_json=$(osascript -e '
+        use AppleScript version "2.4"
+        use scripting additions
+        use framework "Foundation"
+        tell application "Microsoft Edge"
+          set winList to {}
+          set winIdx to 1
+          repeat with w in windows
+            set tabList to {}
+            repeat with t in tabs of w
+              set end of tabList to "{\"url\":" & my jsonStr(URL of t) & ",\"title\":" & my jsonStr(title of t) & "}"
+            end repeat
+            set AppleScript'"'"'s text item delimiters to ","
+            set end of winList to "{\"window\":" & winIdx & ",\"tabs\":[" & (tabList as text) & "]}"
+            set winIdx to winIdx + 1
+          end repeat
+          set AppleScript'"'"'s text item delimiters to ","
+          return "[" & (winList as text) & "]"
+        end tell
+        on jsonStr(val)
+          set s to val as text
+          set s to my replaceText(s, "\\", "\\\\")
+          set s to my replaceText(s, "\"", "\\\"")
+          set s to my replaceText(s, return, "\\n")
+          return "\"" & s & "\""
+        end jsonStr
+        on replaceText(theText, old, new)
+          set {TID, AppleScript'"'"'s text item delimiters} to {AppleScript'"'"'s text item delimiters, old}
+          set parts to text items of theText
+          set AppleScript'"'"'s text item delimiters to new
+          set theText to parts as text
+          set AppleScript'"'"'s text item delimiters to TID
+          return theText
+        end replaceText
+      ' 2>/dev/null) && {
+        echo "$tabs_json" | jq '.' > "$BACKUP_DIR/edge-browser/open-tabs.json"
+        tab_count=$(echo "$tabs_json" | jq '[.[].tabs[]] | length')
+        echo "  Saved $tab_count open tab(s) across $(echo "$tabs_json" | jq 'length') window(s)."
+      } || warn "Failed to capture open tabs via AppleScript"
+    else
+      echo "  [dry-run] Would capture open tabs via AppleScript"
+    fi
+  else
+    echo "  Edge is not running — skipping open tab capture"
   fi
 
   # Copy top-level Local State
@@ -1241,6 +1287,7 @@ Dynamically captured from \`volta list all\`.
 Browser profiles including bookmarks, settings, extensions, history, collections, and sessions.
 Each profile is stored as individual files + tar.gz archives for directories.
 Excludes cookies, login data, caches, and service workers.
+If Edge was running during backup, \`edge-browser/open-tabs.json\` contains all open tab URLs and titles per window.
 
 ### Cursor IDE
 - **settings.json**: Editor settings and preferences
