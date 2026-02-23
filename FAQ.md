@@ -204,3 +204,67 @@ sudo atsutil databases -remove
 ```
 
 Then restart your machine, or at minimum restart the affected applications. Fonts installed to `~/Library/Fonts/` should be picked up automatically after the cache rebuild.
+
+---
+
+## Using results.json for troubleshooting
+
+Both `backup.sh` and `restore.sh` write a `results.json` file in the backup directory with structured status for every step. This is designed for agent automation but is also useful for manual debugging.
+
+### Reading results.json
+
+```bash
+# Quick summary
+jq '.summary' results.json
+
+# Show only failed steps
+jq '.steps[] | select(.status == "failed")' results.json
+
+# Show all errors with their categories
+jq '.steps[].errors[]' results.json
+
+# Check preflight results
+jq '.preflight' results.json
+
+# Check post-run validation
+jq '.validation' results.json
+```
+
+### Common error codes
+
+| Code | Step | Meaning |
+|------|------|---------|
+| `BREW_DUMP_FAILED` | homebrew | `brew bundle dump` failed — try `brew untap` problematic taps |
+| `EDGE_RUNNING` | edge | Edge was running during backup/restore — quit Edge and retry |
+| `WARN` | (various) | Generic warning — check the `message` field for details |
+
+### Resuming from a failed step
+
+If a step fails, fix the root cause and resume without re-running completed steps:
+
+```bash
+# Check which step failed
+jq '.steps[] | select(.status == "failed") | .name' results.json
+
+# Resume from that step
+./backup.sh --resume-from=homebrew
+bash restore.sh --resume-from=edge /path/to/backup
+```
+
+Skipped steps are recorded as `"status": "skipped"` in the new results.json.
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All steps completed |
+| `1` | One or more steps failed |
+| `2` | Preflight check failed (missing jq, git, or insufficient disk space) |
+
+### Error categories
+
+Each error in results.json has a `category` field:
+
+- **`transient`**: Temporary failures (network timeout, brew flake). Safe to retry with `--resume-from`.
+- **`permanent`**: Structural issues (missing directory, corrupt file, wrong permissions). Fix the root cause before retrying.
+- **`user_action`**: Requires human intervention (quit Edge, re-authenticate, approve access).
