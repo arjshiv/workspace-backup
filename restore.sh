@@ -889,8 +889,8 @@ if begin_step 9 "edge" "Restoring Microsoft Edge profiles"; then
 
 EDGE_HOME="$HOME/Library/Application Support/Microsoft Edge"
 
-if [ ! -d "$BACKUP_DIR/edge-browser" ]; then
-  echo "  No edge-browser directory in backup — skipping."
+if [ ! -d "$BACKUP_DIR/edge-browser" ] && [ ! -f "$BACKUP_DIR/open-tabs.json" ]; then
+  echo "  No edge-browser directory or open-tabs.json in backup — skipping."
 else
   # Warn if Edge is running
   if pgrep -x "Microsoft Edge" >/dev/null 2>&1; then
@@ -955,46 +955,52 @@ else
       done
     done
 
-    # Restore open tabs (preserving per-window grouping)
-    if [ -f "$BACKUP_DIR/edge-browser/open-tabs.json" ]; then
-      tab_count=$(jq '[.[].tabs[]] | length' "$BACKUP_DIR/edge-browser/open-tabs.json" 2>/dev/null || echo 0)
-      window_count=$(jq 'length' "$BACKUP_DIR/edge-browser/open-tabs.json" 2>/dev/null || echo 0)
-      if [ "$tab_count" -gt 0 ]; then
-        echo "  Found $tab_count open tab(s) across $window_count window(s) from backup."
-        open_tabs=true
-        if ! $SKIP_CONFIRM && ! $DRY_RUN; then
-          echo -e "  ${YELLOW}Open all $tab_count tabs in $window_count window(s)? [y/N/skip]:${NC}"
-          read -r tabs_confirm
-          [[ "$tabs_confirm" =~ ^[Yy]$ ]] || open_tabs=false
-        fi
-        if $open_tabs && ! $DRY_RUN; then
-          jq -c '.[]' "$BACKUP_DIR/edge-browser/open-tabs.json" | while IFS= read -r win; do
-            win_num=$(echo "$win" | jq '.window')
-            win_tabs=$(echo "$win" | jq '.tabs | length')
-            echo "    Opening window $win_num ($win_tabs tabs)..."
-            first=true
-            echo "$win" | jq -r '.tabs[].url' | while IFS= read -r url; do
-              [ -z "$url" ] && continue
-              if $first; then
-                open -na "Microsoft Edge" --args --new-window "$url" 2>/dev/null || true
-                first=false
-                sleep 1
-              else
-                open -a "Microsoft Edge" "$url" 2>/dev/null || true
-                sleep 0.2
-              fi
-            done
+    echo "  Microsoft Edge profiles restored."
+  fi
+
+  # Restore open tabs (preserving per-window grouping)
+  # Check both edge-browser/ subdir and backup root for the JSON
+  OPEN_TABS_FILE=""
+  if [ -f "$BACKUP_DIR/edge-browser/open-tabs.json" ]; then
+    OPEN_TABS_FILE="$BACKUP_DIR/edge-browser/open-tabs.json"
+  elif [ -f "$BACKUP_DIR/open-tabs.json" ]; then
+    OPEN_TABS_FILE="$BACKUP_DIR/open-tabs.json"
+  fi
+
+  if [ -n "$OPEN_TABS_FILE" ]; then
+    tab_count=$(jq '[.[].tabs[]] | length' "$OPEN_TABS_FILE" 2>/dev/null || echo 0)
+    window_count=$(jq 'length' "$OPEN_TABS_FILE" 2>/dev/null || echo 0)
+    if [ "$tab_count" -gt 0 ]; then
+      echo "  Found $tab_count open tab(s) across $window_count window(s) from backup."
+      open_tabs=true
+      if ! $SKIP_CONFIRM && ! $DRY_RUN; then
+        echo -e "  ${YELLOW}Open all $tab_count tabs in $window_count window(s)? [y/N/skip]:${NC}"
+        read -r tabs_confirm
+        [[ "$tabs_confirm" =~ ^[Yy]$ ]] || open_tabs=false
+      fi
+      if $open_tabs && ! $DRY_RUN; then
+        while IFS= read -r win; do
+          win_num=$(echo "$win" | jq '.window')
+          win_tabs=$(echo "$win" | jq '.tabs | length')
+          echo "    Opening window $win_num ($win_tabs tabs)..."
+          first_url=$(echo "$win" | jq -r '.tabs[0].url')
+          if [ -n "$first_url" ] && [ "$first_url" != "null" ]; then
+            open -na "Microsoft Edge" --args --new-window "$first_url" 2>/dev/null || true
+            sleep 1
+          fi
+          echo "$win" | jq -r '.tabs[1:][].url' | while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            open -a "Microsoft Edge" "$url" 2>/dev/null || true
+            sleep 0.2
           done
-          echo "  Opened $tab_count tab(s) across $window_count window(s) in Microsoft Edge."
-        elif $DRY_RUN; then
-          echo "  [dry-run] Would open $tab_count tab(s) across $window_count window(s) in Microsoft Edge"
-        else
-          echo "  Skipped opening tabs. URLs are saved in: $BACKUP_DIR/edge-browser/open-tabs.json"
-        fi
+        done < <(jq -c '.[]' "$OPEN_TABS_FILE")
+        echo "  Opened $tab_count tab(s) across $window_count window(s) in Microsoft Edge."
+      elif $DRY_RUN; then
+        echo "  [dry-run] Would open $tab_count tab(s) across $window_count window(s) in Microsoft Edge"
+      else
+        echo "  Skipped opening tabs. URLs are saved in: $OPEN_TABS_FILE"
       fi
     fi
-
-    echo "  Microsoft Edge profiles restored."
   fi
 fi
 
