@@ -4,8 +4,8 @@ Backup and restore scripts for migrating a full AI dev environment (Claude Code,
 
 ## Structure
 
-- `backup.sh` — Runs on the source Mac. Auto-discovers project configs, Conductor workspaces, and Volta packages. Produces a self-contained backup folder under `backups/` with all configs, history, workspace metadata, and a restore script. Supports `--dry-run` and `--help`.
-- `restore.sh` — Runs on the target Mac. Installs prerequisites (Homebrew packages, Volta, Oh-My-Zsh, Rust), restores all configs, re-creates Conductor git worktrees, and applies uncommitted change patches. Saves existing files as `*.pre-restore` before overwriting. Supports `--dry-run`, `--yes`/`-y`, and `--help`.
+- `backup.sh` — Runs on the source Mac. Auto-discovers project configs, Conductor workspaces, and Volta packages. Produces a self-contained backup folder under `backups/` with all configs, history, workspace metadata, and a restore script. Supports `--dry-run`, `--resume-from=STEP`, and `--help`. Writes `results.json` for agent consumption.
+- `restore.sh` — Runs on the target Mac. Installs prerequisites (Homebrew packages, Volta, Oh-My-Zsh, Rust), restores all configs, re-creates Conductor git worktrees, and applies uncommitted change patches. Saves existing files as `*.pre-restore` before overwriting. Supports `--dry-run`, `--yes`/`-y`, `--resume-from=STEP`, and `--help`. Writes `results.json` for agent consumption.
 - `backups/` — Gitignored output directory where backup folders land.
 
 ## Key design decisions
@@ -20,12 +20,31 @@ Backup and restore scripts for migrating a full AI dev environment (Claude Code,
 - AWS credentials (`~/.aws/`) and npm config (`~/.npmrc`) are included in the shell-env backup with `chmod 600` applied to sensitive files.
 - Sensitive files (SSH keys, OAuth tokens, .env files, browser history, AWS credentials, .npmrc) get `chmod 600` in the backup. The script warns to encrypt before uploading to cloud storage.
 
+## Agent invocation pattern
+
+Both scripts produce a `results.json` alongside the backup with structured per-step status. A Claude Code agent should:
+
+1. Run the script: `bash backup.sh --yes` or `bash restore.sh --yes /path/to/backup`
+2. Read `results.json` from the backup directory after the script exits
+3. Check `exit_code`: 0 = success, 1 = step failure, 2 = preflight failure
+4. On failure, inspect `.steps[]` for entries with `"status": "failed"` and read their `.errors[]`
+5. Use the error `category` to decide the action:
+   - `transient` — retry with `--resume-from=STEP_NAME`
+   - `permanent` — fix the root cause (e.g. missing file, bad perms), then retry
+   - `user_action` — ask the user (e.g. quit Edge, re-authenticate)
+6. Retry: `bash backup.sh --resume-from=homebrew --yes`
+
+Step names for `--resume-from` (backup.sh): `create_dirs`, `claude_code`, `project_configs`, `codex_cli`, `shared_agents`, `conductor_worktrees`, `conductor_db`, `shell_env`, `homebrew`, `volta`, `edge`, `cursor_ide`, `desktop_apps`, `manifest`, `restore_guide`, `copy_scripts`, `permissions`
+
+Step names for `--resume-from` (restore.sh): `prerequisites`, `shell_env`, `volta`, `claude_code`, `project_configs`, `codex_cli`, `conductor_worktrees`, `conductor_db`, `edge`, `cursor_ide`, `desktop_apps`
+
 ## Adding a new backup section
 
-1. Add a new step in `backup.sh` between the existing sections (follow the `step "..."` / section comment pattern).
-2. Create the corresponding restore section in `restore.sh` at the same position.
+1. Add a new step in `backup.sh` between the existing sections, wrapped in `begin_step`/`end_step`.
+2. Create the corresponding restore section in `restore.sh` at the same position, also wrapped in `begin_step`/`end_step`.
 3. Add the new section to the manifest generation block near the end of `backup.sh`.
 4. Update `RESTORE-GUIDE.md` generation in `backup.sh` to document the new section.
+5. Add the step name to the `--resume-from` lookup in both scripts and update `TOTAL_STEPS`.
 
 ## What NOT to back up
 
