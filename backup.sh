@@ -35,6 +35,7 @@ CURRENT_STEP_ERRORS=""
 CURRENT_STEP_WARNINGS=""
 RESUME_FROM=""
 RESUME_FROM_ID=0
+ONLY_STEP=""
 
 init_results() {
   RESULTS_FILE="$1"
@@ -79,6 +80,16 @@ begin_step() {
   CURRENT_STEP_NAME="$name"
   CURRENT_STEP_ERRORS="[]"
   CURRENT_STEP_WARNINGS="[]"
+
+  # Handle --only: run only the named step (plus create_dirs and permissions)
+  if [ -n "$ONLY_STEP" ] && [ "$name" != "$ONLY_STEP" ] && [ "$name" != "create_dirs" ] && [ "$name" != "permissions" ]; then
+    if [ -n "$RESULTS_FILE" ]; then
+      local tmp="${RESULTS_FILE}.tmp"
+      jq --argjson s "{\"id\":$id,\"name\":\"$name\",\"status\":\"skipped\",\"errors\":[],\"warnings\":[]}" \
+        '.steps += [$s] | .summary.skipped += 1' "$RESULTS_FILE" > "$tmp" && mv "$tmp" "$RESULTS_FILE"
+    fi
+    return 1
+  fi
 
   # Handle --resume-from: skip steps before the resume point
   if [ "$RESUME_FROM_ID" -gt 0 ] && [ "$id" -lt "$RESUME_FROM_ID" ]; then
@@ -204,6 +215,8 @@ Options:
   --dry-run             Print what would be done without writing anything
   --encrypt             Encrypt the backup as a password-protected .zip
                         after completion (prompts for password)
+  --only=STEP           Run only the named step (plus create_dirs and
+                        permissions). All other steps are skipped.
   --resume-from=STEP    Resume from a named step, skipping earlier ones.
                         Step names: create_dirs, claude_code, project_configs,
                         codex_cli, shared_agents, conductor_worktrees,
@@ -232,6 +245,7 @@ for arg in "$@"; do
     --help|-h) show_help ;;
     --dry-run) DRY_RUN=true ;;
     --encrypt) ENCRYPT=true ;;
+    --only=*) ONLY_STEP="${arg#*=}" ;;
     --resume-from=*) RESUME_FROM="${arg#*=}" ;;
     *) echo "Unknown option: $arg"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
@@ -261,6 +275,20 @@ if [ -n "$RESUME_FROM" ]; then
     permissions)          RESUME_FROM_ID=19 ;;
     *) echo "Unknown step name: $RESUME_FROM"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
+fi
+
+# Validate --only step name
+if [ -n "$ONLY_STEP" ]; then
+  case "$ONLY_STEP" in
+    create_dirs|claude_code|project_configs|codex_cli|shared_agents|\
+    conductor_worktrees|conductor_db|shell_env|homebrew|volta|edge|\
+    cursor_ide|db_tools|desktop_apps|github_repos|manifest|\
+    restore_guide|copy_scripts|permissions) ;;
+    *) echo "Unknown step name: $ONLY_STEP"; echo "Try 'backup.sh --help'"; exit 1 ;;
+  esac
+  if [ -n "$RESUME_FROM" ]; then
+    echo "ERROR: --only and --resume-from cannot be used together"; exit 1
+  fi
 fi
 
 if $DRY_RUN; then

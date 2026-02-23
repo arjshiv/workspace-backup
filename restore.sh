@@ -22,6 +22,7 @@ CURRENT_STEP_ERRORS="[]"
 CURRENT_STEP_WARNINGS="[]"
 RESUME_FROM=""
 RESUME_FROM_ID=0
+ONLY_STEP=""
 TOTAL_STEPS=13
 
 init_results() {
@@ -66,6 +67,22 @@ begin_step() {
   CURRENT_STEP_NAME="$name"
   CURRENT_STEP_ERRORS="[]"
   CURRENT_STEP_WARNINGS="[]"
+
+  # Handle --only: run only the named step
+  if [ -n "$ONLY_STEP" ] && [ "$name" != "$ONLY_STEP" ]; then
+    echo ""
+    echo -e "${GREEN}==> [${id}/${TOTAL_STEPS}]${NC} ${BOLD}$label${NC} (skipped — only running $ONLY_STEP)"
+    if [ -n "$RESULTS_FILE" ]; then
+      local tmp
+      tmp=$(jq \
+        --arg name "$name" \
+        --arg label "$label" \
+        --argjson id "$id" \
+        '.steps += [{"id": $id, "name": $name, "label": $label, "status": "skipped", "errors": [], "warnings": []}] | .summary.skipped += 1' \
+        "$RESULTS_FILE") && echo "$tmp" > "$RESULTS_FILE"
+    fi
+    return 1
+  fi
 
   # Resume support: skip steps before the resume point
   if [ "$RESUME_FROM_ID" -gt 0 ] && [ "$id" -lt "$RESUME_FROM_ID" ]; then
@@ -178,10 +195,11 @@ usage() {
   echo "Options:"
   echo "  -y, --yes              Skip confirmation prompt"
   echo "  --dry-run              Show what would be restored without writing"
+  echo "  --only=STEP            Run only the named step, skipping all others"
   echo "  --resume-from=STEP     Resume from a specific step (e.g. --resume-from=edge)"
   echo "  -h, --help             Show this help message"
   echo ""
-  echo "Steps (for --resume-from):"
+  echo "Steps (for --only / --resume-from):"
   echo "  prerequisites, shell_env, volta, claude_code, project_configs,"
   echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
   echo "  db_tools, github_repos, desktop_apps"
@@ -193,6 +211,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage ;;
     -y|--yes) SKIP_CONFIRM=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --only=*) ONLY_STEP="${1#*=}"; shift ;;
     --resume-from=*) RESUME_FROM="${1#*=}"; shift ;;
     -*) echo "Unknown option: $1"; echo "Run with --help for usage."; exit 1 ;;
     *) BACKUP_DIR="$1"; shift ;;
@@ -242,6 +261,25 @@ if [ -n "$RESUME_FROM" ]; then
       exit 1
       ;;
   esac
+fi
+
+# Validate --only step name
+if [ -n "$ONLY_STEP" ]; then
+  case "$ONLY_STEP" in
+    prerequisites|shell_env|volta|claude_code|project_configs|\
+    codex_cli|conductor_worktrees|conductor_db|edge|cursor_ide|\
+    db_tools|github_repos|desktop_apps) ;;
+    *)
+      echo "ERROR: Unknown step name '$ONLY_STEP' for --only"
+      echo "Valid steps: prerequisites, shell_env, volta, claude_code, project_configs,"
+      echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
+      echo "  db_tools, github_repos, desktop_apps"
+      exit 1
+      ;;
+  esac
+  if [ -n "$RESUME_FROM" ]; then
+    echo "ERROR: --only and --resume-from cannot be used together"; exit 1
+  fi
 fi
 
 echo -e "${BOLD}========================================${NC}"
@@ -1249,6 +1287,7 @@ fi
 # ============================================================
 # POST-RESTORE VALIDATION
 # ============================================================
+if [ -z "$ONLY_STEP" ]; then
 echo ""
 echo -e "${BOLD}Running post-restore validation...${NC}"
 
@@ -1302,6 +1341,7 @@ else
 fi
 
 echo "  Validation complete."
+fi  # end --only skip for validation
 
 # ============================================================
 # SET EXIT CODE
