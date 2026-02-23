@@ -22,7 +22,7 @@ CURRENT_STEP_ERRORS="[]"
 CURRENT_STEP_WARNINGS="[]"
 RESUME_FROM=""
 RESUME_FROM_ID=0
-TOTAL_STEPS=11
+TOTAL_STEPS=12
 
 init_results() {
   RESULTS_FILE="$1"
@@ -184,7 +184,7 @@ usage() {
   echo "Steps (for --resume-from):"
   echo "  prerequisites, shell_env, volta, claude_code, project_configs,"
   echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
-  echo "  desktop_apps"
+  echo "  github_repos, desktop_apps"
   exit 0
 }
 
@@ -220,11 +220,12 @@ if [ -n "$RESUME_FROM" ]; then
     conductor_db)         RESUME_FROM_ID=8 ;;
     edge)                 RESUME_FROM_ID=9 ;;
     cursor_ide)           RESUME_FROM_ID=10 ;;
-    desktop_apps)         RESUME_FROM_ID=11 ;;
+    github_repos)         RESUME_FROM_ID=11 ;;
+    desktop_apps)         RESUME_FROM_ID=12 ;;
     *)
       echo "ERROR: Unknown step name '$RESUME_FROM' for --resume-from"
       echo "Valid steps: prerequisites, shell_env, volta, claude_code, project_configs,"
-      echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide, desktop_apps"
+      echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide, github_repos, desktop_apps"
       exit 1
       ;;
   esac
@@ -980,15 +981,23 @@ else
     if $DRY_RUN; then
       ext_count=$(wc -l < "$BACKUP_DIR/cursor-ide/extensions.txt" | tr -d ' ')
       echo "  [dry-run] Would install $ext_count Cursor extensions"
-    elif command -v cursor &>/dev/null; then
-      echo "  Installing Cursor extensions..."
-      while IFS= read -r ext; do
-        [ -z "$ext" ] && continue
-        cursor --install-extension "$ext" 2>/dev/null || warn "Failed to install Cursor extension: $ext"
-      done < "$BACKUP_DIR/cursor-ide/extensions.txt"
     else
-      echo "  Cursor CLI not found. Install extensions manually:"
-      echo "    cat $BACKUP_DIR/cursor-ide/extensions.txt | xargs -L1 cursor --install-extension"
+      CURSOR_CLI=""
+      if command -v cursor &>/dev/null; then
+        CURSOR_CLI="cursor"
+      elif [ -x "/Applications/Cursor.app/Contents/Resources/app/bin/cursor" ]; then
+        CURSOR_CLI="/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+      fi
+      if [ -n "$CURSOR_CLI" ]; then
+        echo "  Installing Cursor extensions..."
+        while IFS= read -r ext; do
+          [ -z "$ext" ] && continue
+          "$CURSOR_CLI" --install-extension "$ext" 2>/dev/null || warn "Failed to install Cursor extension: $ext"
+        done < "$BACKUP_DIR/cursor-ide/extensions.txt"
+      else
+        echo "  Cursor CLI not found. Install extensions manually:"
+        echo "    cat $BACKUP_DIR/cursor-ide/extensions.txt | xargs -L1 cursor --install-extension"
+      fi
     fi
   fi
 
@@ -999,9 +1008,35 @@ end_step
 fi
 
 # ============================================================
-# STEP 11: DESKTOP APPS (iTerm2, Warp, Rectangle, Fonts)
+# STEP 11: GITHUB REPOS
 # ============================================================
-if begin_step 11 "desktop_apps" "Restoring desktop app preferences"; then
+if begin_step 11 "github_repos" "Restoring ~/GitHub repositories"; then
+
+if [ ! -f "$BACKUP_DIR/github-repos/github.tar.gz" ]; then
+  echo "  No github-repos/github.tar.gz in backup — skipping."
+else
+  if [ -d "$HOME/GitHub" ]; then
+    echo "  ~/GitHub already exists — archive will merge (existing files preserved, backed-up files overwritten)"
+  fi
+  safe_mkdir "$HOME/GitHub"
+  echo "  Extracting ~/GitHub archive (this may take a while)..."
+  safe_tar -xzf "$BACKUP_DIR/github-repos/github.tar.gz" -C "$HOME/" 2>/dev/null || {
+    record_error "GITHUB_EXTRACT" "Failed to extract ~/GitHub archive" "transient" "Check disk space and retry with --resume-from=github_repos"
+    warn "Failed to extract ~/GitHub archive"
+  }
+  if ! $DRY_RUN && [ -d "$HOME/GitHub" ]; then
+    repo_count=$(find "$HOME/GitHub" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')
+    echo "  ~/GitHub restored ($repo_count top-level directories)"
+  fi
+fi
+
+end_step
+fi
+
+# ============================================================
+# STEP 12: DESKTOP APPS (iTerm2, Warp, Rectangle, Fonts)
+# ============================================================
+if begin_step 12 "desktop_apps" "Restoring desktop app preferences"; then
 
 if [ ! -d "$BACKUP_DIR/desktop-apps" ]; then
   echo "  No desktop-apps directory in backup — skipping."

@@ -24,7 +24,7 @@ NC='\033[0m'
 
 # --- Step counter ---
 CURRENT_STEP=0
-TOTAL_STEPS=17
+TOTAL_STEPS=18
 
 # --- Results JSON infrastructure ---
 RESULTS_FILE=""
@@ -205,8 +205,8 @@ Options:
                         Step names: create_dirs, claude_code, project_configs,
                         codex_cli, shared_agents, conductor_worktrees,
                         conductor_db, shell_env, homebrew, volta, edge,
-                        cursor_ide, desktop_apps, manifest, restore_guide,
-                        copy_scripts, permissions
+                        cursor_ide, desktop_apps, github_repos, manifest,
+                        restore_guide, copy_scripts, permissions
 
 Prerequisites:
   - macOS with Homebrew installed
@@ -249,10 +249,11 @@ if [ -n "$RESUME_FROM" ]; then
     edge)                 RESUME_FROM_ID=11 ;;
     cursor_ide)           RESUME_FROM_ID=12 ;;
     desktop_apps)         RESUME_FROM_ID=13 ;;
-    manifest)             RESUME_FROM_ID=14 ;;
-    restore_guide)        RESUME_FROM_ID=15 ;;
-    copy_scripts)         RESUME_FROM_ID=16 ;;
-    permissions)          RESUME_FROM_ID=17 ;;
+    github_repos)         RESUME_FROM_ID=14 ;;
+    manifest)             RESUME_FROM_ID=15 ;;
+    restore_guide)        RESUME_FROM_ID=16 ;;
+    copy_scripts)         RESUME_FROM_ID=17 ;;
+    permissions)          RESUME_FROM_ID=18 ;;
     *) echo "Unknown step name: $RESUME_FROM"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
 fi
@@ -288,7 +289,7 @@ for tool in jq git tar; do
 done
 
 # Optional tools
-for tool in plutil sqlite3 brew volta cursor; do
+for tool in plutil sqlite3 brew volta; do
   if command -v "$tool" &>/dev/null; then
     add_preflight_check "$tool" "ok"
   else
@@ -296,6 +297,20 @@ for tool in plutil sqlite3 brew volta cursor; do
     echo -e "  ${YELLOW}SKIP:${NC} $tool not found (optional)"
   fi
 done
+
+# Resolve Cursor CLI: PATH first, then app bundle fallback
+CURSOR_CLI=""
+if command -v cursor &>/dev/null; then
+  CURSOR_CLI="cursor"
+elif [ -x "/Applications/Cursor.app/Contents/Resources/app/bin/cursor" ]; then
+  CURSOR_CLI="/Applications/Cursor.app/Contents/Resources/app/bin/cursor"
+fi
+if [ -n "$CURSOR_CLI" ]; then
+  add_preflight_check "cursor" "ok"
+else
+  add_preflight_check "cursor" "skip" "cursor not found (optional)"
+  echo -e "  ${YELLOW}SKIP:${NC} cursor not found (optional)"
+fi
 
 # Disk space
 avail_mb=$(df -m "$SCRIPT_DIR" | awk 'NR==2{print $4}')
@@ -341,7 +356,7 @@ run_cmd mkdir -p "$BACKUP_DIR"/conductor/workspaces
 run_cmd mkdir -p "$BACKUP_DIR"/shell-env/{ssh,gh,inshellisense,aws}
 run_cmd mkdir -p "$BACKUP_DIR"/volta
 run_cmd mkdir -p "$BACKUP_DIR"/edge-browser
-run_cmd mkdir -p "$BACKUP_DIR"/{cursor-ide,desktop-apps}
+run_cmd mkdir -p "$BACKUP_DIR"/{cursor-ide,desktop-apps,github-repos}
 
 end_step
 fi
@@ -977,11 +992,11 @@ else
   fi
 
   # Extension list via CLI
-  if command -v cursor &>/dev/null; then
+  if [ -n "$CURSOR_CLI" ]; then
     if ! $DRY_RUN; then
-      cursor --list-extensions > "$BACKUP_DIR/cursor-ide/extensions.txt" 2>/dev/null || warn "Failed to list Cursor extensions via CLI"
+      "$CURSOR_CLI" --list-extensions > "$BACKUP_DIR/cursor-ide/extensions.txt" 2>/dev/null || warn "Failed to list Cursor extensions via CLI"
     else
-      echo "  [dry-run] cursor --list-extensions > extensions.txt"
+      echo "  [dry-run] $CURSOR_CLI --list-extensions > extensions.txt"
     fi
   elif [ -d "$HOME/.cursor/extensions" ]; then
     # Fallback: derive extension list from directory names
@@ -1076,9 +1091,50 @@ end_step
 fi
 
 # ============================================================
+# GITHUB REPOS
+# ============================================================
+if begin_step 14 "github_repos" "Backing up ~/GitHub repositories"; then
+
+GITHUB_DIR="$HOME/GitHub"
+if [ ! -d "$GITHUB_DIR" ]; then
+  warn "~/GitHub directory not found — skipping"
+else
+  echo "  Archiving ~/GitHub (excluding node_modules, build artifacts, backups)..."
+  if ! $DRY_RUN; then
+    tar -czf "$BACKUP_DIR/github-repos/github.tar.gz" \
+      --exclude='node_modules' \
+      --exclude='.next' \
+      --exclude='.venv' \
+      --exclude='venv' \
+      --exclude='__pycache__' \
+      --exclude='.cache' \
+      --exclude='dist' \
+      --exclude='build' \
+      --exclude='.turbo' \
+      --exclude='.nyc_output' \
+      --exclude='coverage' \
+      --exclude='.DS_Store' \
+      --exclude='workspace-backup/backups' \
+      -C "$HOME" GitHub/ 2>/dev/null || {
+        record_error "GITHUB_TAR" "Failed to archive ~/GitHub" "transient" "Check disk space and retry with --resume-from=github_repos"
+        warn "Failed to archive ~/GitHub"
+      }
+    if [ -f "$BACKUP_DIR/github-repos/github.tar.gz" ]; then
+      archive_size=$(du -sh "$BACKUP_DIR/github-repos/github.tar.gz" | cut -f1)
+      echo "  ~/GitHub archived ($archive_size)"
+    fi
+  else
+    echo "  [dry-run] tar -czf $BACKUP_DIR/github-repos/github.tar.gz -C $HOME GitHub/"
+  fi
+fi
+
+end_step
+fi
+
+# ============================================================
 # MANIFEST
 # ============================================================
-if begin_step 14 "manifest" "Generating manifest"; then
+if begin_step 15 "manifest" "Generating manifest"; then
 
 if ! $DRY_RUN; then
   backup_size=$(du -sh "$BACKUP_DIR" | cut -f1)
@@ -1105,7 +1161,8 @@ if ! $DRY_RUN; then
     "volta": "$(du -sh "$BACKUP_DIR/volta" 2>/dev/null | cut -f1)",
     "edge_browser": "$(du -sh "$BACKUP_DIR/edge-browser" 2>/dev/null | cut -f1)",
     "cursor_ide": "$(du -sh "$BACKUP_DIR/cursor-ide" 2>/dev/null | cut -f1)",
-    "desktop_apps": "$(du -sh "$BACKUP_DIR/desktop-apps" 2>/dev/null | cut -f1)"
+    "desktop_apps": "$(du -sh "$BACKUP_DIR/desktop-apps" 2>/dev/null | cut -f1)",
+    "github_repos": "$(du -sh "$BACKUP_DIR/github-repos" 2>/dev/null | cut -f1)"
   }
 }
 MANIFEST
@@ -1117,7 +1174,7 @@ fi
 # ============================================================
 # RESTORE GUIDE FOR THE BACKUP FOLDER
 # ============================================================
-if begin_step 15 "restore_guide" "Generating RESTORE-GUIDE.md"; then
+if begin_step 16 "restore_guide" "Generating RESTORE-GUIDE.md"; then
 
 CURRENT_USER=$(whoami)
 CURRENT_HOST=$(hostname)
@@ -1193,6 +1250,9 @@ Excludes cookies, login data, caches, and service workers.
 - **Rectangle**: Preferences plist (XML)
 - **User Fonts**: \`~/Library/Fonts/\` archive (tar.gz)
 
+### GitHub Repos
+- **github.tar.gz**: Full archive of \`~/GitHub/\` excluding node_modules, .venv, venv, .next, __pycache__, .cache, dist, build, .turbo, .nyc_output, coverage, .DS_Store, and workspace-backup/backups.
+
 ## SENSITIVE FILES
 - \`codex-cli/auth.json\` — OAuth JWT + refresh tokens
 - \`shell-env/ssh/id_ed25519\` — SSH private key
@@ -1219,7 +1279,7 @@ fi
 # ============================================================
 # COPY SCRIPTS INTO BACKUP
 # ============================================================
-if begin_step 16 "copy_scripts" "Copying scripts into backup"; then
+if begin_step 17 "copy_scripts" "Copying scripts into backup"; then
 
 run_cmd cp "$SCRIPT_DIR/backup.sh" "$BACKUP_DIR/"
 if ! $DRY_RUN; then
@@ -1234,7 +1294,7 @@ fi
 # ============================================================
 # PERMISSIONS
 # ============================================================
-if begin_step 17 "permissions" "Setting permissions on sensitive files"; then
+if begin_step 18 "permissions" "Setting permissions on sensitive files"; then
 
 if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/codex-cli/auth.json" 2>/dev/null || record_warning "CHMOD" "auth.json not found for chmod" "transient"

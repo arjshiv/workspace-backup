@@ -34,9 +34,9 @@ Both scripts produce a `results.json` alongside the backup with structured per-s
    - `user_action` — ask the user (e.g. quit Edge, re-authenticate)
 6. Retry: `bash backup.sh --resume-from=homebrew --yes`
 
-Step names for `--resume-from` (backup.sh): `create_dirs`, `claude_code`, `project_configs`, `codex_cli`, `shared_agents`, `conductor_worktrees`, `conductor_db`, `shell_env`, `homebrew`, `volta`, `edge`, `cursor_ide`, `desktop_apps`, `manifest`, `restore_guide`, `copy_scripts`, `permissions`
+Step names for `--resume-from` (backup.sh): `create_dirs`, `claude_code`, `project_configs`, `codex_cli`, `shared_agents`, `conductor_worktrees`, `conductor_db`, `shell_env`, `homebrew`, `volta`, `edge`, `cursor_ide`, `desktop_apps`, `github_repos`, `manifest`, `restore_guide`, `copy_scripts`, `permissions`
 
-Step names for `--resume-from` (restore.sh): `prerequisites`, `shell_env`, `volta`, `claude_code`, `project_configs`, `codex_cli`, `conductor_worktrees`, `conductor_db`, `edge`, `cursor_ide`, `desktop_apps`
+Step names for `--resume-from` (restore.sh): `prerequisites`, `shell_env`, `volta`, `claude_code`, `project_configs`, `codex_cli`, `conductor_worktrees`, `conductor_db`, `edge`, `cursor_ide`, `github_repos`, `desktop_apps`
 
 ## Adding a new backup section
 
