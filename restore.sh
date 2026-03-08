@@ -23,7 +23,7 @@ CURRENT_STEP_WARNINGS="[]"
 RESUME_FROM=""
 RESUME_FROM_ID=0
 ONLY_STEP=""
-TOTAL_STEPS=15
+TOTAL_STEPS=20
 
 init_results() {
   RESULTS_FILE="$1"
@@ -202,7 +202,8 @@ usage() {
   echo "Steps (for --only / --resume-from):"
   echo "  prerequisites, shell_env, volta, claude_code, project_configs,"
   echo "  codex_cli, conductor_worktrees, conductor_db, edge, chrome,"
-  echo "  safari, cursor_ide, db_tools, github_repos, desktop_apps"
+  echo "  safari, cursor_ide, db_tools, github_repos, desktop_apps,"
+  echo "  vscode, docker, python_tools, raycast, macos_defaults"
   exit 0
 }
 
@@ -255,11 +256,17 @@ if [ -n "$RESUME_FROM" ]; then
     db_tools)             RESUME_FROM_ID=13 ;;
     github_repos)         RESUME_FROM_ID=14 ;;
     desktop_apps)         RESUME_FROM_ID=15 ;;
+    vscode)               RESUME_FROM_ID=16 ;;
+    docker)               RESUME_FROM_ID=17 ;;
+    python_tools)         RESUME_FROM_ID=18 ;;
+    raycast)              RESUME_FROM_ID=19 ;;
+    macos_defaults)       RESUME_FROM_ID=20 ;;
     *)
       echo "ERROR: Unknown step name '$RESUME_FROM' for --resume-from"
       echo "Valid steps: prerequisites, shell_env, volta, claude_code, project_configs,"
       echo "  codex_cli, conductor_worktrees, conductor_db, edge, chrome, safari,"
-      echo "  cursor_ide, db_tools, github_repos, desktop_apps"
+      echo "  cursor_ide, db_tools, github_repos, desktop_apps, vscode, docker,"
+      echo "  python_tools, raycast, macos_defaults"
       exit 1
       ;;
   esac
@@ -270,12 +277,14 @@ if [ -n "$ONLY_STEP" ]; then
   case "$ONLY_STEP" in
     prerequisites|shell_env|volta|claude_code|project_configs|\
     codex_cli|conductor_worktrees|conductor_db|edge|chrome|safari|\
-    cursor_ide|db_tools|github_repos|desktop_apps) ;;
+    cursor_ide|db_tools|github_repos|desktop_apps|\
+    vscode|docker|python_tools|raycast|macos_defaults) ;;
     *)
       echo "ERROR: Unknown step name '$ONLY_STEP' for --only"
       echo "Valid steps: prerequisites, shell_env, volta, claude_code, project_configs,"
       echo "  codex_cli, conductor_worktrees, conductor_db, edge, chrome, safari,"
-      echo "  cursor_ide, db_tools, github_repos, desktop_apps"
+      echo "  cursor_ide, db_tools, github_repos, desktop_apps, vscode, docker,"
+      echo "  python_tools, raycast, macos_defaults"
       exit 1
       ;;
   esac
@@ -1569,6 +1578,90 @@ end_step
 fi
 
 # ============================================================
+# STEP 16: VS CODE
+# ============================================================
+if begin_step 16 "vscode" "Restoring VS Code settings"; then
+
+VSCODE_HOME="$HOME/Library/Application Support/Code"
+
+if [ ! -d "$BACKUP_DIR/vscode" ]; then
+  echo "  No vscode directory in backup — skipping."
+else
+  VSCODE_USER_DIR="$VSCODE_HOME/User"
+  safe_mkdir "$VSCODE_USER_DIR"
+
+  # Settings and keybindings
+  for f in settings.json keybindings.json; do
+    if [ -f "$BACKUP_DIR/vscode/$f" ]; then
+      pre_restore_backup "$VSCODE_USER_DIR/$f"
+      safe_cp "$BACKUP_DIR/vscode/$f" "$VSCODE_USER_DIR/" 2>/dev/null || warn "Failed to restore VS Code $f"
+    fi
+  done
+
+  # Snippets directory
+  if [ -d "$BACKUP_DIR/vscode/snippets" ]; then
+    safe_mkdir "$VSCODE_USER_DIR/snippets"
+    safe_cp -R "$BACKUP_DIR/vscode/snippets/"* "$VSCODE_USER_DIR/snippets/" 2>/dev/null || true
+  fi
+
+  # Extensions
+  if [ -f "$BACKUP_DIR/vscode/extensions.txt" ]; then
+    if $DRY_RUN; then
+      ext_count=$(wc -l < "$BACKUP_DIR/vscode/extensions.txt" | tr -d ' ')
+      echo "  [dry-run] Would install $ext_count VS Code extensions"
+    else
+      VSCODE_CLI=""
+      if command -v code &>/dev/null; then
+        VSCODE_CLI="code"
+      elif [ -x "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" ]; then
+        VSCODE_CLI="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+      fi
+      if [ -n "$VSCODE_CLI" ]; then
+        echo "  Installing VS Code extensions..."
+        while IFS= read -r ext; do
+          [ -z "$ext" ] && continue
+          "$VSCODE_CLI" --install-extension "$ext" 2>/dev/null || warn "Failed to install VS Code extension: $ext"
+        done < "$BACKUP_DIR/vscode/extensions.txt"
+      else
+        echo "  VS Code CLI not found. Install extensions manually:"
+        echo "    cat $BACKUP_DIR/vscode/extensions.txt | xargs -L1 code --install-extension"
+      fi
+    fi
+  fi
+
+  # Workspace metadata
+  if [ -d "$BACKUP_DIR/vscode/workspaceStorage" ]; then
+    VSCODE_WORKSPACE_STORAGE="$VSCODE_USER_DIR/workspaceStorage"
+    echo "  Restoring workspace metadata..."
+    ws_count=0
+    for ws_dir in "$BACKUP_DIR/vscode/workspaceStorage"/*/; do
+      [ -d "$ws_dir" ] || continue
+      ws_hash=$(basename "$ws_dir")
+      if [ -f "$ws_dir/workspace.json" ]; then
+        safe_mkdir "$VSCODE_WORKSPACE_STORAGE/$ws_hash"
+        safe_cp "$ws_dir/workspace.json" "$VSCODE_WORKSPACE_STORAGE/$ws_hash/" 2>/dev/null || true
+        ws_count=$((ws_count + 1))
+      fi
+    done
+    echo "  Restored $ws_count workspace mapping(s)."
+  fi
+
+  # Recent workspaces DB
+  if [ -f "$BACKUP_DIR/vscode/globalStorage/state.vscdb" ]; then
+    VSCODE_GLOBAL_STORAGE="$VSCODE_USER_DIR/globalStorage"
+    safe_mkdir "$VSCODE_GLOBAL_STORAGE"
+    pre_restore_backup "$VSCODE_GLOBAL_STORAGE/state.vscdb"
+    safe_cp "$BACKUP_DIR/vscode/globalStorage/state.vscdb" "$VSCODE_GLOBAL_STORAGE/" 2>/dev/null || warn "Failed to restore VS Code state.vscdb"
+    echo "  Recent workspaces DB restored."
+  fi
+
+  echo "  VS Code restored."
+fi
+
+end_step
+fi
+
+# ============================================================
 # POST-RESTORE VALIDATION
 # ============================================================
 if [ -z "$ONLY_STEP" ]; then
@@ -1697,7 +1790,9 @@ echo "  12. Launch DataGrip and verify data sources and settings are restored"
 echo ""
 echo "  13. Restart iTerm2/Warp/Rectangle to pick up restored preferences"
 echo ""
-echo "  14. Source your shell config:"
+echo "  14. Launch VS Code and verify extensions/settings are restored"
+echo ""
+echo "  15. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
 

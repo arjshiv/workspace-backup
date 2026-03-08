@@ -26,7 +26,7 @@ NC='\033[0m'
 
 # --- Step counter ---
 CURRENT_STEP=0
-TOTAL_STEPS=21
+TOTAL_STEPS=26
 
 # --- Results JSON infrastructure ---
 RESULTS_FILE=""
@@ -223,8 +223,9 @@ Options:
                         codex_cli, shared_agents, conductor_worktrees,
                         conductor_db, shell_env, homebrew, volta, edge,
                         chrome, safari, cursor_ide, db_tools, desktop_apps,
-                        github_repos, manifest, restore_guide, copy_scripts,
-                        permissions
+                        github_repos, vscode, docker, python_tools, raycast,
+                        macos_defaults, manifest, restore_guide,
+                        copy_scripts, permissions
 
 Prerequisites:
   - macOS with Homebrew installed
@@ -273,10 +274,15 @@ if [ -n "$RESUME_FROM" ]; then
     db_tools)             RESUME_FROM_ID=15 ;;
     desktop_apps)         RESUME_FROM_ID=16 ;;
     github_repos)         RESUME_FROM_ID=17 ;;
-    manifest)             RESUME_FROM_ID=18 ;;
-    restore_guide)        RESUME_FROM_ID=19 ;;
-    copy_scripts)         RESUME_FROM_ID=20 ;;
-    permissions)          RESUME_FROM_ID=21 ;;
+    vscode)               RESUME_FROM_ID=18 ;;
+    docker)               RESUME_FROM_ID=19 ;;
+    python_tools)         RESUME_FROM_ID=20 ;;
+    raycast)              RESUME_FROM_ID=21 ;;
+    macos_defaults)       RESUME_FROM_ID=22 ;;
+    manifest)             RESUME_FROM_ID=23 ;;
+    restore_guide)        RESUME_FROM_ID=24 ;;
+    copy_scripts)         RESUME_FROM_ID=25 ;;
+    permissions)          RESUME_FROM_ID=26 ;;
     *) echo "Unknown step name: $RESUME_FROM"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
 fi
@@ -287,6 +293,7 @@ if [ -n "$ONLY_STEP" ]; then
     create_dirs|claude_code|project_configs|codex_cli|shared_agents|\
     conductor_worktrees|conductor_db|shell_env|homebrew|volta|edge|\
     chrome|safari|cursor_ide|db_tools|desktop_apps|github_repos|\
+    vscode|docker|python_tools|raycast|macos_defaults|\
     manifest|restore_guide|copy_scripts|permissions) ;;
     *) echo "Unknown step name: $ONLY_STEP"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
@@ -396,6 +403,7 @@ run_cmd mkdir -p "$BACKUP_DIR"/edge-browser
 run_cmd mkdir -p "$BACKUP_DIR"/chrome-browser
 run_cmd mkdir -p "$BACKUP_DIR"/safari-browser
 run_cmd mkdir -p "$BACKUP_DIR"/{cursor-ide,db-tools/datagrip,db-tools/psql,desktop-apps,github-repos}
+run_cmd mkdir -p "$BACKUP_DIR"/{vscode,docker,python-tools,raycast,macos-defaults}
 
 end_step
 fi
@@ -1605,9 +1613,99 @@ end_step
 fi
 
 # ============================================================
+# VS CODE
+# ============================================================
+if begin_step 18 "vscode" "Backing up VS Code settings"; then
+
+VSCODE_HOME="$HOME/Library/Application Support/Code"
+
+if [ ! -d "$VSCODE_HOME/User" ]; then
+  warn "VS Code not installed or no User dir — skipping"
+else
+  copy_if_exists "$VSCODE_HOME/User/settings.json" "$BACKUP_DIR/vscode/"
+  copy_if_exists "$VSCODE_HOME/User/keybindings.json" "$BACKUP_DIR/vscode/"
+
+  if [ -d "$VSCODE_HOME/User/snippets" ]; then
+    if ! $DRY_RUN; then
+      cp -R "$VSCODE_HOME/User/snippets" "$BACKUP_DIR/vscode/" 2>/dev/null || warn "Failed to copy VS Code snippets"
+    else
+      echo "  [dry-run] cp -R $VSCODE_HOME/User/snippets $BACKUP_DIR/vscode/"
+    fi
+  fi
+
+  # Extension list via CLI
+  VSCODE_CLI=""
+  if command -v code &>/dev/null; then
+    VSCODE_CLI="code"
+  elif [ -x "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" ]; then
+    VSCODE_CLI="/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+  fi
+
+  if [ -n "$VSCODE_CLI" ]; then
+    if ! $DRY_RUN; then
+      "$VSCODE_CLI" --list-extensions > "$BACKUP_DIR/vscode/extensions.txt" 2>/dev/null || warn "Failed to list VS Code extensions via CLI"
+    else
+      echo "  [dry-run] code --list-extensions > extensions.txt"
+    fi
+  elif [ -d "$HOME/.vscode/extensions" ]; then
+    if ! $DRY_RUN; then
+      ls -1 "$HOME/.vscode/extensions/" > "$BACKUP_DIR/vscode/extensions.txt" 2>/dev/null || warn "Failed to list VS Code extensions from directory"
+    else
+      echo "  [dry-run] ls ~/.vscode/extensions/ > extensions.txt"
+    fi
+  else
+    warn "Cannot list VS Code extensions — CLI not in PATH and ~/.vscode/extensions not found"
+  fi
+
+  # Workspace metadata
+  VSCODE_WORKSPACE_STORAGE="$VSCODE_HOME/User/workspaceStorage"
+  if [ -d "$VSCODE_WORKSPACE_STORAGE" ]; then
+    echo "  Backing up workspace metadata..."
+    run_cmd mkdir -p "$BACKUP_DIR/vscode/workspaceStorage"
+    if ! $DRY_RUN; then
+      ws_count=0
+      for ws_dir in "$VSCODE_WORKSPACE_STORAGE"/*/; do
+        [ -d "$ws_dir" ] || continue
+        ws_hash=$(basename "$ws_dir")
+        if [ -f "$ws_dir/workspace.json" ]; then
+          mkdir -p "$BACKUP_DIR/vscode/workspaceStorage/$ws_hash"
+          cp "$ws_dir/workspace.json" "$BACKUP_DIR/vscode/workspaceStorage/$ws_hash/" 2>/dev/null || true
+          ws_count=$((ws_count + 1))
+        fi
+      done
+      echo "  Backed up $ws_count workspace mapping(s)."
+    else
+      echo "  [dry-run] Would copy workspace.json files from workspaceStorage"
+    fi
+  fi
+
+  # Recent workspaces database
+  VSCODE_GLOBAL_STORAGE="$VSCODE_HOME/User/globalStorage"
+  if [ -f "$VSCODE_GLOBAL_STORAGE/state.vscdb" ]; then
+    run_cmd mkdir -p "$BACKUP_DIR/vscode/globalStorage"
+    if ! $DRY_RUN; then
+      if command -v sqlite3 &>/dev/null; then
+        sqlite3 "$VSCODE_GLOBAL_STORAGE/state.vscdb" ".backup '$BACKUP_DIR/vscode/globalStorage/state.vscdb'" 2>/dev/null \
+          || { warn "sqlite3 backup of VS Code state.vscdb failed, falling back to cp"; cp "$VSCODE_GLOBAL_STORAGE/state.vscdb" "$BACKUP_DIR/vscode/globalStorage/"; }
+      else
+        cp "$VSCODE_GLOBAL_STORAGE/state.vscdb" "$BACKUP_DIR/vscode/globalStorage/" 2>/dev/null || warn "Failed to copy VS Code state.vscdb"
+      fi
+      echo "  Recent workspaces DB backed up."
+    else
+      echo "  [dry-run] Would backup VS Code globalStorage/state.vscdb"
+    fi
+  fi
+fi
+
+echo "  VS Code done."
+
+end_step
+fi
+
+# ============================================================
 # MANIFEST
 # ============================================================
-if begin_step 18 "manifest" "Generating manifest"; then
+if begin_step 23 "manifest" "Generating manifest"; then
 
 if ! $DRY_RUN; then
   backup_size=$(du -sh "$BACKUP_DIR" | cut -f1)
@@ -1638,7 +1736,8 @@ if ! $DRY_RUN; then
     "cursor_ide": "$(du -sh "$BACKUP_DIR/cursor-ide" 2>/dev/null | cut -f1)",
     "db_tools": "$(du -sh "$BACKUP_DIR/db-tools" 2>/dev/null | cut -f1)",
     "desktop_apps": "$(du -sh "$BACKUP_DIR/desktop-apps" 2>/dev/null | cut -f1)",
-    "github_repos": "$(du -sh "$BACKUP_DIR/github-repos" 2>/dev/null | cut -f1)"
+    "github_repos": "$(du -sh "$BACKUP_DIR/github-repos" 2>/dev/null | cut -f1)",
+    "vscode": "$(du -sh "$BACKUP_DIR/vscode" 2>/dev/null | cut -f1)"
   }
 }
 MANIFEST
@@ -1650,7 +1749,7 @@ fi
 # ============================================================
 # RESTORE GUIDE FOR THE BACKUP FOLDER
 # ============================================================
-if begin_step 19 "restore_guide" "Generating RESTORE-GUIDE.md"; then
+if begin_step 24 "restore_guide" "Generating RESTORE-GUIDE.md"; then
 
 CURRENT_USER=$(whoami)
 CURRENT_HOST=$(hostname)
@@ -1757,6 +1856,14 @@ NOTE: Safari data access requires Full Disk Access for Terminal. If files are mi
 ### GitHub Repos
 - **github.tar.gz**: Full archive of \`~/GitHub/\` excluding node_modules, .venv, venv, .next, __pycache__, .cache, dist, build, .turbo, .nyc_output, coverage, .DS_Store, and workspace-backup/backups.
 
+### VS Code
+- **settings.json**: Editor settings and preferences
+- **keybindings.json**: Custom keyboard shortcuts
+- **snippets/**: User-defined code snippets
+- **extensions.txt**: List of installed extensions (via CLI or directory listing)
+- **workspaceStorage/**: Workspace metadata (workspace.json files)
+- **globalStorage/state.vscdb**: Recent workspaces and projects list (SQLite)
+
 ## SENSITIVE FILES
 - \`codex-cli/auth.json\` — OAuth JWT + refresh tokens
 - \`shell-env/ssh/id_ed25519\` — SSH private key
@@ -1788,7 +1895,7 @@ fi
 # ============================================================
 # COPY SCRIPTS INTO BACKUP
 # ============================================================
-if begin_step 20 "copy_scripts" "Copying scripts into backup"; then
+if begin_step 25 "copy_scripts" "Copying scripts into backup"; then
 
 run_cmd cp "$SCRIPT_DIR/backup.sh" "$BACKUP_DIR/"
 if ! $DRY_RUN; then
@@ -1803,7 +1910,7 @@ fi
 # ============================================================
 # PERMISSIONS
 # ============================================================
-if begin_step 21 "permissions" "Setting permissions on sensitive files"; then
+if begin_step 26 "permissions" "Setting permissions on sensitive files"; then
 
 if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/codex-cli/auth.json" 2>/dev/null || record_warning "CHMOD" "auth.json not found for chmod" "transient"
