@@ -23,7 +23,7 @@ CURRENT_STEP_WARNINGS="[]"
 RESUME_FROM=""
 RESUME_FROM_ID=0
 ONLY_STEP=""
-TOTAL_STEPS=13
+TOTAL_STEPS=15
 
 init_results() {
   RESULTS_FILE="$1"
@@ -201,8 +201,8 @@ usage() {
   echo ""
   echo "Steps (for --only / --resume-from):"
   echo "  prerequisites, shell_env, volta, claude_code, project_configs,"
-  echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
-  echo "  db_tools, github_repos, desktop_apps"
+  echo "  codex_cli, conductor_worktrees, conductor_db, edge, chrome,"
+  echo "  safari, cursor_ide, db_tools, github_repos, desktop_apps"
   exit 0
 }
 
@@ -249,15 +249,17 @@ if [ -n "$RESUME_FROM" ]; then
     conductor_worktrees)  RESUME_FROM_ID=7 ;;
     conductor_db)         RESUME_FROM_ID=8 ;;
     edge)                 RESUME_FROM_ID=9 ;;
-    cursor_ide)           RESUME_FROM_ID=10 ;;
-    db_tools)             RESUME_FROM_ID=11 ;;
-    github_repos)         RESUME_FROM_ID=12 ;;
-    desktop_apps)         RESUME_FROM_ID=13 ;;
+    chrome)               RESUME_FROM_ID=10 ;;
+    safari)               RESUME_FROM_ID=11 ;;
+    cursor_ide)           RESUME_FROM_ID=12 ;;
+    db_tools)             RESUME_FROM_ID=13 ;;
+    github_repos)         RESUME_FROM_ID=14 ;;
+    desktop_apps)         RESUME_FROM_ID=15 ;;
     *)
       echo "ERROR: Unknown step name '$RESUME_FROM' for --resume-from"
       echo "Valid steps: prerequisites, shell_env, volta, claude_code, project_configs,"
-      echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
-      echo "  db_tools, github_repos, desktop_apps"
+      echo "  codex_cli, conductor_worktrees, conductor_db, edge, chrome, safari,"
+      echo "  cursor_ide, db_tools, github_repos, desktop_apps"
       exit 1
       ;;
   esac
@@ -267,13 +269,13 @@ fi
 if [ -n "$ONLY_STEP" ]; then
   case "$ONLY_STEP" in
     prerequisites|shell_env|volta|claude_code|project_configs|\
-    codex_cli|conductor_worktrees|conductor_db|edge|cursor_ide|\
-    db_tools|github_repos|desktop_apps) ;;
+    codex_cli|conductor_worktrees|conductor_db|edge|chrome|safari|\
+    cursor_ide|db_tools|github_repos|desktop_apps) ;;
     *)
       echo "ERROR: Unknown step name '$ONLY_STEP' for --only"
       echo "Valid steps: prerequisites, shell_env, volta, claude_code, project_configs,"
-      echo "  codex_cli, conductor_worktrees, conductor_db, edge, cursor_ide,"
-      echo "  db_tools, github_repos, desktop_apps"
+      echo "  codex_cli, conductor_worktrees, conductor_db, edge, chrome, safari,"
+      echo "  cursor_ide, db_tools, github_repos, desktop_apps"
       exit 1
       ;;
   esac
@@ -444,6 +446,22 @@ if pgrep -x "Microsoft Edge" >/dev/null 2>&1; then
   echo -e "  ${YELLOW}WARN: Microsoft Edge is running — profile restore may conflict${NC}"
 else
   add_preflight_check "edge_not_running" "pass" "Microsoft Edge is not running"
+fi
+
+# Chrome not running (informational)
+if pgrep -x "Google Chrome" >/dev/null 2>&1; then
+  add_preflight_check "chrome_not_running" "warn" "Google Chrome is running — profile restore may conflict"
+  echo -e "  ${YELLOW}WARN: Google Chrome is running — profile restore may conflict${NC}"
+else
+  add_preflight_check "chrome_not_running" "pass" "Google Chrome is not running"
+fi
+
+# Safari not running (informational)
+if pgrep -x "Safari" >/dev/null 2>&1; then
+  add_preflight_check "safari_not_running" "warn" "Safari is running — data restore may conflict"
+  echo -e "  ${YELLOW}WARN: Safari is running — data restore may conflict${NC}"
+else
+  add_preflight_check "safari_not_running" "pass" "Safari is not running"
 fi
 
 if ! $preflight_ok; then
@@ -1048,9 +1066,239 @@ end_step
 fi
 
 # ============================================================
-# STEP 10: CURSOR IDE
+# STEP 10: GOOGLE CHROME
 # ============================================================
-if begin_step 10 "cursor_ide" "Restoring Cursor IDE settings"; then
+if begin_step 10 "chrome" "Restoring Google Chrome profiles"; then
+
+CHROME_HOME="$HOME/Library/Application Support/Google/Chrome"
+
+if [ ! -d "$BACKUP_DIR/chrome-browser" ] && [ ! -f "$BACKUP_DIR/chrome-browser/open-tabs.json" ]; then
+  echo "  No chrome-browser directory in backup — skipping."
+else
+  # Warn if Chrome is running
+  if pgrep -x "Google Chrome" >/dev/null 2>&1; then
+    if ! $SKIP_CONFIRM && ! $DRY_RUN; then
+      echo ""
+      echo -e "  ${RED}WARNING: Google Chrome is currently running.${NC}"
+      echo -e "  ${RED}Restoring while Chrome is open can corrupt profile data.${NC}"
+      echo ""
+      echo -e "  ${YELLOW}Quit Chrome and press Enter to continue, or type 'skip' to skip this step:${NC}"
+      read -r chrome_confirm
+      if [[ "$chrome_confirm" == "skip" ]]; then
+        echo "  Skipping Chrome restore."
+        CHROME_SKIP=true
+      fi
+    else
+      record_warning "CHROME_RUNNING" "Google Chrome is running — profile data may be overwritten on exit" "user_action"
+      warn "Chrome is running — restoring anyway (--yes mode)"
+    fi
+  fi
+
+  if [ "${CHROME_SKIP:-}" != "true" ]; then
+    safe_mkdir "$CHROME_HOME"
+
+    # Restore Local State
+    if [ -f "$BACKUP_DIR/chrome-browser/Local State" ]; then
+      pre_restore_backup "$CHROME_HOME/Local State"
+      safe_cp "$BACKUP_DIR/chrome-browser/Local State" "$CHROME_HOME/" 2>/dev/null || warn "Failed to restore Chrome Local State"
+    fi
+
+    # Iterate over profile directories in the backup
+    for encoded_dir in "$BACKUP_DIR/chrome-browser"/*/; do
+      [ -d "$encoded_dir" ] || continue
+      encoded_name=$(basename "$encoded_dir")
+
+      # Decode: "Profile_1" -> "Profile 1", "Default" stays "Default"
+      profile_name="${encoded_name//_/ }"
+      echo "  Restoring profile: $profile_name"
+
+      safe_mkdir "$CHROME_HOME/$profile_name"
+
+      # Restore individual files
+      for f in Bookmarks Bookmarks.bak Preferences "Secure Preferences" "Top Sites" Favicons History "Web Data"; do
+        if [ -f "$encoded_dir/$f" ]; then
+          pre_restore_backup "$CHROME_HOME/$profile_name/$f"
+          safe_cp "$encoded_dir/$f" "$CHROME_HOME/$profile_name/" 2>/dev/null || true
+        fi
+      done
+
+      # Extract tar.gz archives
+      for archive in Sessions Extensions Collections; do
+        if [ -f "$encoded_dir/${archive}.tar.gz" ]; then
+          echo "    Extracting $archive..."
+          safe_tar -xzf "$encoded_dir/${archive}.tar.gz" -C "$CHROME_HOME/$profile_name/" 2>/dev/null || warn "Failed to extract Chrome $profile_name/$archive"
+        fi
+      done
+    done
+
+    echo "  Google Chrome profiles restored."
+  fi
+
+  # Restore open tabs
+  if [ -f "$BACKUP_DIR/chrome-browser/open-tabs.json" ]; then
+    tab_count=$(jq '[.[].tabs[]] | length' "$BACKUP_DIR/chrome-browser/open-tabs.json" 2>/dev/null || echo 0)
+    window_count=$(jq 'length' "$BACKUP_DIR/chrome-browser/open-tabs.json" 2>/dev/null || echo 0)
+    if [ "$tab_count" -gt 0 ]; then
+      echo "  Found $tab_count open tab(s) across $window_count window(s) from backup."
+      open_tabs=true
+      if ! $SKIP_CONFIRM && ! $DRY_RUN; then
+        echo -e "  ${YELLOW}Open all $tab_count tabs in $window_count window(s)? [y/N/skip]:${NC}"
+        read -r tabs_confirm
+        [[ "$tabs_confirm" =~ ^[Yy]$ ]] || open_tabs=false
+      fi
+      if $open_tabs && ! $DRY_RUN; then
+        while IFS= read -r win; do
+          win_num=$(echo "$win" | jq '.window')
+          win_tabs=$(echo "$win" | jq '.tabs | length')
+          echo "    Opening window $win_num ($win_tabs tabs)..."
+          first_url=$(echo "$win" | jq -r '.tabs[0].url')
+          if [ -n "$first_url" ] && [ "$first_url" != "null" ]; then
+            open -na "Google Chrome" --args --new-window "$first_url" 2>/dev/null || true
+            sleep 1
+          fi
+          echo "$win" | jq -r '.tabs[1:][].url' | while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            open -a "Google Chrome" "$url" 2>/dev/null || true
+            sleep 0.2
+          done
+        done < <(jq -c '.[]' "$BACKUP_DIR/chrome-browser/open-tabs.json")
+        echo "  Opened $tab_count tab(s) across $window_count window(s) in Google Chrome."
+      elif $DRY_RUN; then
+        echo "  [dry-run] Would open $tab_count tab(s) across $window_count window(s) in Google Chrome"
+      else
+        echo "  Skipped opening tabs. URLs are saved in: $BACKUP_DIR/chrome-browser/open-tabs.json"
+      fi
+    fi
+  fi
+fi
+
+end_step
+fi
+
+# ============================================================
+# STEP 11: SAFARI
+# ============================================================
+if begin_step 11 "safari" "Restoring Safari browser data"; then
+
+SAFARI_HOME="$HOME/Library/Safari"
+
+if [ ! -d "$BACKUP_DIR/safari-browser" ]; then
+  echo "  No safari-browser directory in backup — skipping."
+else
+  # Warn if Safari is running
+  if pgrep -x "Safari" >/dev/null 2>&1; then
+    if ! $SKIP_CONFIRM && ! $DRY_RUN; then
+      echo ""
+      echo -e "  ${RED}WARNING: Safari is currently running.${NC}"
+      echo -e "  ${RED}Restoring while Safari is open can corrupt data.${NC}"
+      echo ""
+      echo -e "  ${YELLOW}Quit Safari and press Enter to continue, or type 'skip' to skip this step:${NC}"
+      read -r safari_confirm
+      if [[ "$safari_confirm" == "skip" ]]; then
+        echo "  Skipping Safari restore."
+        SAFARI_SKIP=true
+      fi
+    else
+      record_warning "SAFARI_RUNNING" "Safari is running — data may be overwritten on exit" "user_action"
+      warn "Safari is running — restoring anyway (--yes mode)"
+    fi
+  fi
+
+  if [ "${SAFARI_SKIP:-}" != "true" ]; then
+    safe_mkdir "$SAFARI_HOME"
+
+    # Restore Safari data files
+    SAFARI_FILES=(
+      "Bookmarks.plist" "History.db" "History.db-wal" "History.db-shm"
+      "TopSites.plist" "LastSession.plist" "Downloads.plist"
+      "CloudTabs.db" "CloudTabs.db-wal" "CloudTabs.db-shm"
+    )
+
+    for f in "${SAFARI_FILES[@]}"; do
+      if [ -f "$BACKUP_DIR/safari-browser/$f" ]; then
+        pre_restore_backup "$SAFARI_HOME/$f"
+        safe_cp "$BACKUP_DIR/safari-browser/$f" "$SAFARI_HOME/" 2>/dev/null || {
+          if [[ "$f" == "History.db"* ]]; then
+            warn "Cannot write $f — Full Disk Access may be required"
+          else
+            warn "Failed to restore $f"
+          fi
+        }
+      fi
+    done
+
+    # Reading List
+    if [ -f "$BACKUP_DIR/safari-browser/ReadingList.tar.gz" ]; then
+      safe_tar -xzf "$BACKUP_DIR/safari-browser/ReadingList.tar.gz" -C "$SAFARI_HOME/" 2>/dev/null || warn "Failed to extract ReadingList"
+    fi
+
+    # Legacy Extensions
+    if [ -f "$BACKUP_DIR/safari-browser/Extensions.tar.gz" ]; then
+      safe_tar -xzf "$BACKUP_DIR/safari-browser/Extensions.tar.gz" -C "$SAFARI_HOME/" 2>/dev/null || warn "Failed to extract Safari Extensions"
+    fi
+
+    # Restore Safari preferences
+    if [ -f "$BACKUP_DIR/safari-browser/safari-preferences.plist" ]; then
+      if ! $DRY_RUN; then
+        defaults import com.apple.Safari "$BACKUP_DIR/safari-browser/safari-preferences.plist" 2>/dev/null || warn "Failed to import Safari preferences"
+      else
+        echo "  [dry-run] defaults import com.apple.Safari safari-preferences.plist"
+      fi
+    fi
+
+    chmod 600 "$SAFARI_HOME/History.db" 2>/dev/null || true
+
+    echo "  Safari data restored."
+  fi
+
+  # Restore open tabs
+  if [ -f "$BACKUP_DIR/safari-browser/open-tabs.json" ]; then
+    tab_count=$(jq '[.[].tabs[]] | length' "$BACKUP_DIR/safari-browser/open-tabs.json" 2>/dev/null || echo 0)
+    window_count=$(jq 'length' "$BACKUP_DIR/safari-browser/open-tabs.json" 2>/dev/null || echo 0)
+    if [ "$tab_count" -gt 0 ]; then
+      echo "  Found $tab_count open tab(s) across $window_count window(s) from backup."
+      open_tabs=true
+      if ! $SKIP_CONFIRM && ! $DRY_RUN; then
+        echo -e "  ${YELLOW}Open all $tab_count tabs in $window_count window(s)? [y/N/skip]:${NC}"
+        read -r tabs_confirm
+        [[ "$tabs_confirm" =~ ^[Yy]$ ]] || open_tabs=false
+      fi
+      if $open_tabs && ! $DRY_RUN; then
+        # Open Safari first
+        open -a "Safari" 2>/dev/null || true
+        sleep 1
+        while IFS= read -r win; do
+          win_num=$(echo "$win" | jq '.window')
+          win_tabs=$(echo "$win" | jq '.tabs | length')
+          echo "    Opening window $win_num ($win_tabs tabs)..."
+          first_url=$(echo "$win" | jq -r '.tabs[0].url')
+          if [ -n "$first_url" ] && [ "$first_url" != "null" ]; then
+            osascript -e "tell application \"Safari\" to make new document with properties {URL:\"$first_url\"}" 2>/dev/null || true
+            sleep 0.5
+          fi
+          echo "$win" | jq -r '.tabs[1:][].url' | while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            osascript -e "tell application \"Safari\" to tell front window to set current tab to (make new tab with properties {URL:\"$url\"})" 2>/dev/null || true
+            sleep 0.2
+          done
+        done < <(jq -c '.[]' "$BACKUP_DIR/safari-browser/open-tabs.json")
+        echo "  Opened $tab_count tab(s) across $window_count window(s) in Safari."
+      elif $DRY_RUN; then
+        echo "  [dry-run] Would open $tab_count tab(s) across $window_count window(s) in Safari"
+      else
+        echo "  Skipped opening tabs. URLs are saved in: $BACKUP_DIR/safari-browser/open-tabs.json"
+      fi
+    fi
+  fi
+fi
+
+end_step
+fi
+
+# ============================================================
+# STEP 12: CURSOR IDE
+# ============================================================
+if begin_step 12 "cursor_ide" "Restoring Cursor IDE settings"; then
 
 if [ ! -d "$BACKUP_DIR/cursor-ide" ]; then
   echo "  No cursor-ide directory in backup — skipping."
@@ -1104,9 +1352,9 @@ end_step
 fi
 
 # ============================================================
-# STEP 11: DATABASE TOOLS (DataGrip + psql)
+# STEP 13: DATABASE TOOLS (DataGrip + psql)
 # ============================================================
-if begin_step 11 "db_tools" "Restoring database tools config"; then
+if begin_step 13 "db_tools" "Restoring database tools config"; then
 
 if [ ! -d "$BACKUP_DIR/db-tools" ]; then
   echo "  No db-tools directory in backup — skipping."
@@ -1196,9 +1444,9 @@ end_step
 fi
 
 # ============================================================
-# STEP 12: GITHUB REPOS
+# STEP 14: GITHUB REPOS
 # ============================================================
-if begin_step 12 "github_repos" "Restoring ~/GitHub repositories"; then
+if begin_step 14 "github_repos" "Restoring ~/GitHub repositories"; then
 
 if [ ! -f "$BACKUP_DIR/github-repos/github.tar.gz" ]; then
   echo "  No github-repos/github.tar.gz in backup — skipping."
@@ -1222,9 +1470,9 @@ end_step
 fi
 
 # ============================================================
-# STEP 12: DESKTOP APPS (iTerm2, Warp, Rectangle, Fonts)
+# STEP 15: DESKTOP APPS (iTerm2, Warp, Rectangle, Fonts)
 # ============================================================
-if begin_step 13 "desktop_apps" "Restoring desktop app preferences"; then
+if begin_step 15 "desktop_apps" "Restoring desktop app preferences"; then
 
 if [ ! -d "$BACKUP_DIR/desktop-apps" ]; then
   echo "  No desktop-apps directory in backup — skipping."
@@ -1402,13 +1650,18 @@ echo "     codex auth"
 echo ""
 echo "  8. Launch Microsoft Edge and verify bookmarks/extensions restored"
 echo ""
-echo "  9. Launch Cursor and verify extensions/settings are restored"
+echo "  9. Launch Google Chrome and verify bookmarks/extensions restored"
 echo ""
-echo "  10. Launch DataGrip and verify data sources and settings are restored"
+echo "  10. Launch Safari and verify bookmarks are restored"
+echo "      NOTE: Modern Safari extensions are App Store managed — reinstall from App Store"
 echo ""
-echo "  11. Restart iTerm2/Warp/Rectangle to pick up restored preferences"
+echo "  11. Launch Cursor and verify extensions/settings are restored"
 echo ""
-echo "  12. Source your shell config:"
+echo "  12. Launch DataGrip and verify data sources and settings are restored"
+echo ""
+echo "  13. Restart iTerm2/Warp/Rectangle to pick up restored preferences"
+echo ""
+echo "  14. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
 

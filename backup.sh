@@ -11,6 +11,7 @@ CONDUCTOR_HOME="$HOME/conductor"
 CONDUCTOR_APP_SUPPORT="$HOME/Library/Application Support/com.conductor.app"
 AGENTS_HOME="$HOME/.agents"
 EDGE_HOME="$HOME/Library/Application Support/Microsoft Edge"
+CHROME_HOME="$HOME/Library/Application Support/Google/Chrome"
 WARN_COUNT=0
 LOG_FILE=""
 DRY_RUN=false
@@ -25,7 +26,7 @@ NC='\033[0m'
 
 # --- Step counter ---
 CURRENT_STEP=0
-TOTAL_STEPS=19
+TOTAL_STEPS=21
 
 # --- Results JSON infrastructure ---
 RESULTS_FILE=""
@@ -221,8 +222,9 @@ Options:
                         Step names: create_dirs, claude_code, project_configs,
                         codex_cli, shared_agents, conductor_worktrees,
                         conductor_db, shell_env, homebrew, volta, edge,
-                        cursor_ide, db_tools, desktop_apps, github_repos,
-                        manifest, restore_guide, copy_scripts, permissions
+                        chrome, safari, cursor_ide, db_tools, desktop_apps,
+                        github_repos, manifest, restore_guide, copy_scripts,
+                        permissions
 
 Prerequisites:
   - macOS with Homebrew installed
@@ -265,14 +267,16 @@ if [ -n "$RESUME_FROM" ]; then
     homebrew)             RESUME_FROM_ID=9 ;;
     volta)                RESUME_FROM_ID=10 ;;
     edge)                 RESUME_FROM_ID=11 ;;
-    cursor_ide)           RESUME_FROM_ID=12 ;;
-    db_tools)             RESUME_FROM_ID=13 ;;
-    desktop_apps)         RESUME_FROM_ID=14 ;;
-    github_repos)         RESUME_FROM_ID=15 ;;
-    manifest)             RESUME_FROM_ID=16 ;;
-    restore_guide)        RESUME_FROM_ID=17 ;;
-    copy_scripts)         RESUME_FROM_ID=18 ;;
-    permissions)          RESUME_FROM_ID=19 ;;
+    chrome)               RESUME_FROM_ID=12 ;;
+    safari)               RESUME_FROM_ID=13 ;;
+    cursor_ide)           RESUME_FROM_ID=14 ;;
+    db_tools)             RESUME_FROM_ID=15 ;;
+    desktop_apps)         RESUME_FROM_ID=16 ;;
+    github_repos)         RESUME_FROM_ID=17 ;;
+    manifest)             RESUME_FROM_ID=18 ;;
+    restore_guide)        RESUME_FROM_ID=19 ;;
+    copy_scripts)         RESUME_FROM_ID=20 ;;
+    permissions)          RESUME_FROM_ID=21 ;;
     *) echo "Unknown step name: $RESUME_FROM"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
 fi
@@ -282,8 +286,8 @@ if [ -n "$ONLY_STEP" ]; then
   case "$ONLY_STEP" in
     create_dirs|claude_code|project_configs|codex_cli|shared_agents|\
     conductor_worktrees|conductor_db|shell_env|homebrew|volta|edge|\
-    cursor_ide|db_tools|desktop_apps|github_repos|manifest|\
-    restore_guide|copy_scripts|permissions) ;;
+    chrome|safari|cursor_ide|db_tools|desktop_apps|github_repos|\
+    manifest|restore_guide|copy_scripts|permissions) ;;
     *) echo "Unknown step name: $ONLY_STEP"; echo "Try 'backup.sh --help'"; exit 1 ;;
   esac
   if [ -n "$RESUME_FROM" ]; then
@@ -389,6 +393,8 @@ run_cmd mkdir -p "$BACKUP_DIR"/conductor/workspaces
 run_cmd mkdir -p "$BACKUP_DIR"/shell-env/{ssh,gh,inshellisense,aws}
 run_cmd mkdir -p "$BACKUP_DIR"/volta
 run_cmd mkdir -p "$BACKUP_DIR"/edge-browser
+run_cmd mkdir -p "$BACKUP_DIR"/chrome-browser
+run_cmd mkdir -p "$BACKUP_DIR"/safari-browser
 run_cmd mkdir -p "$BACKUP_DIR"/{cursor-ide,db-tools/datagrip,db-tools/psql,desktop-apps,github-repos}
 
 end_step
@@ -1050,9 +1056,278 @@ end_step
 fi
 
 # ============================================================
+# GOOGLE CHROME
+# ============================================================
+if begin_step 12 "chrome" "Backing up Google Chrome profiles"; then
+
+if [ ! -d "$CHROME_HOME" ]; then
+  warn "Google Chrome not installed — skipping"
+else
+  # Capture open tabs via AppleScript if Chrome is running
+  if pgrep -x "Google Chrome" >/dev/null 2>&1; then
+    warn "Google Chrome is running — backup may miss in-flight data"
+    echo "  Capturing open tabs from running Chrome..."
+    if ! $DRY_RUN; then
+      tabs_json=$(osascript -e '
+        use AppleScript version "2.4"
+        use scripting additions
+        use framework "Foundation"
+        tell application "Google Chrome"
+          set winList to {}
+          set winIdx to 1
+          repeat with w in windows
+            set tabList to {}
+            repeat with t in tabs of w
+              set end of tabList to "{\"url\":" & my jsonStr(URL of t) & ",\"title\":" & my jsonStr(title of t) & "}"
+            end repeat
+            set AppleScript'"'"'s text item delimiters to ","
+            set end of winList to "{\"window\":" & winIdx & ",\"tabs\":[" & (tabList as text) & "]}"
+            set winIdx to winIdx + 1
+          end repeat
+          set AppleScript'"'"'s text item delimiters to ","
+          return "[" & (winList as text) & "]"
+        end tell
+        on jsonStr(val)
+          set s to val as text
+          set s to my replaceText(s, "\\", "\\\\")
+          set s to my replaceText(s, "\"", "\\\"")
+          set s to my replaceText(s, return, "\\n")
+          return "\"" & s & "\""
+        end jsonStr
+        on replaceText(theText, old, new)
+          set {TID, AppleScript'"'"'s text item delimiters} to {AppleScript'"'"'s text item delimiters, old}
+          set parts to text items of theText
+          set AppleScript'"'"'s text item delimiters to new
+          set theText to parts as text
+          set AppleScript'"'"'s text item delimiters to TID
+          return theText
+        end replaceText
+      ' 2>/dev/null) && {
+        echo "$tabs_json" | jq '.' > "$BACKUP_DIR/chrome-browser/open-tabs.json"
+        tab_count=$(echo "$tabs_json" | jq '[.[].tabs[]] | length')
+        echo "  Saved $tab_count open tab(s) across $(echo "$tabs_json" | jq 'length') window(s)."
+      } || warn "Failed to capture open tabs via AppleScript"
+    else
+      echo "  [dry-run] Would capture open tabs via AppleScript"
+    fi
+  else
+    echo "  Chrome is not running — skipping open tab capture"
+  fi
+
+  # Copy top-level Local State
+  copy_if_exists "$CHROME_HOME/Local State" "$BACKUP_DIR/chrome-browser/"
+
+  # Auto-discover profiles (Default + Profile *)
+  chrome_profiles=()
+  for profile_dir in "$CHROME_HOME"/Default "$CHROME_HOME"/Profile\ *; do
+    [ -d "$profile_dir" ] && chrome_profiles+=("$profile_dir")
+  done
+
+  if [ ${#chrome_profiles[@]} -eq 0 ]; then
+    warn "No Chrome profiles found"
+  else
+    # Files to copy per profile (exclude cookies, login data, caches)
+    CHROME_PROFILE_FILES=(
+      "Bookmarks" "Bookmarks.bak" "Preferences" "Secure Preferences"
+      "Top Sites" "Favicons" "History" "Web Data"
+    )
+    # Directories to tar.gz per profile
+    CHROME_PROFILE_DIRS=("Sessions" "Extensions" "Collections")
+
+    profiles_json="["
+    first_profile=true
+
+    for profile_path in "${chrome_profiles[@]}"; do
+      profile_name=$(basename "$profile_path")
+      # Encode spaces: "Profile 1" -> "Profile_1" for filesystem safety
+      encoded_name="${profile_name// /_}"
+      echo "  Processing profile: $profile_name"
+
+      run_cmd mkdir -p "$BACKUP_DIR/chrome-browser/$encoded_name"
+
+      # Copy individual files
+      for f in "${CHROME_PROFILE_FILES[@]}"; do
+        if [ -f "$profile_path/$f" ]; then
+          run_cmd cp "$profile_path/$f" "$BACKUP_DIR/chrome-browser/$encoded_name/"
+        fi
+      done
+
+      # Tar directories
+      for d in "${CHROME_PROFILE_DIRS[@]}"; do
+        if [ -d "$profile_path/$d" ]; then
+          if ! $DRY_RUN; then
+            tar -czf "$BACKUP_DIR/chrome-browser/$encoded_name/${d}.tar.gz" \
+              -C "$profile_path" "$d/" 2>/dev/null || warn "Failed to archive Chrome $profile_name/$d"
+          else
+            echo "  [dry-run] tar -czf chrome-browser/$encoded_name/${d}.tar.gz"
+          fi
+        fi
+      done
+
+      # Build profiles.json entry
+      if $first_profile; then
+        first_profile=false
+      else
+        profiles_json+=","
+      fi
+      profiles_json+="{\"name\":\"$profile_name\",\"encoded\":\"$encoded_name\"}"
+    done
+
+    profiles_json+="]"
+
+    # Write profiles.json
+    if ! $DRY_RUN; then
+      echo "$profiles_json" | jq '.' > "$BACKUP_DIR/chrome-browser/profiles.json"
+    else
+      echo "  [dry-run] Would write chrome-browser/profiles.json"
+    fi
+
+    echo "  Backed up ${#chrome_profiles[@]} Chrome profile(s)."
+  fi
+fi
+
+echo "  Google Chrome done."
+
+end_step
+fi
+
+# ============================================================
+# SAFARI
+# ============================================================
+if begin_step 13 "safari" "Backing up Safari browser data"; then
+
+SAFARI_HOME="$HOME/Library/Safari"
+
+if [ ! -d "$SAFARI_HOME" ]; then
+  warn "Safari data directory not found — skipping"
+else
+  # Capture open tabs via AppleScript if Safari is running
+  if pgrep -x "Safari" >/dev/null 2>&1; then
+    echo "  Capturing open tabs from running Safari..."
+    if ! $DRY_RUN; then
+      tabs_json=$(osascript -e '
+        use AppleScript version "2.4"
+        use scripting additions
+        use framework "Foundation"
+        tell application "Safari"
+          set winList to {}
+          set winIdx to 1
+          repeat with w in windows
+            set tabList to {}
+            repeat with t in tabs of w
+              set end of tabList to "{\"url\":" & my jsonStr(URL of t) & ",\"title\":" & my jsonStr(name of t) & "}"
+            end repeat
+            set AppleScript'"'"'s text item delimiters to ","
+            set end of winList to "{\"window\":" & winIdx & ",\"tabs\":[" & (tabList as text) & "]}"
+            set winIdx to winIdx + 1
+          end repeat
+          set AppleScript'"'"'s text item delimiters to ","
+          return "[" & (winList as text) & "]"
+        end tell
+        on jsonStr(val)
+          set s to val as text
+          set s to my replaceText(s, "\\", "\\\\")
+          set s to my replaceText(s, "\"", "\\\"")
+          set s to my replaceText(s, return, "\\n")
+          return "\"" & s & "\""
+        end jsonStr
+        on replaceText(theText, old, new)
+          set {TID, AppleScript'"'"'s text item delimiters} to {AppleScript'"'"'s text item delimiters, old}
+          set parts to text items of theText
+          set AppleScript'"'"'s text item delimiters to new
+          set theText to parts as text
+          set AppleScript'"'"'s text item delimiters to TID
+          return theText
+        end replaceText
+      ' 2>/dev/null) && {
+        echo "$tabs_json" | jq '.' > "$BACKUP_DIR/safari-browser/open-tabs.json"
+        tab_count=$(echo "$tabs_json" | jq '[.[].tabs[]] | length')
+        echo "  Saved $tab_count open tab(s) across $(echo "$tabs_json" | jq 'length') window(s)."
+      } || warn "Failed to capture Safari open tabs via AppleScript"
+    else
+      echo "  [dry-run] Would capture open tabs via AppleScript"
+    fi
+  else
+    echo "  Safari is not running — skipping open tab capture"
+  fi
+
+  # Key Safari data files
+  SAFARI_FILES=(
+    "Bookmarks.plist" "History.db" "History.db-wal" "History.db-shm"
+    "TopSites.plist" "LastSession.plist" "Downloads.plist"
+    "CloudTabs.db" "CloudTabs.db-wal" "CloudTabs.db-shm"
+  )
+
+  for f in "${SAFARI_FILES[@]}"; do
+    if [ -f "$SAFARI_HOME/$f" ]; then
+      run_cmd cp "$SAFARI_HOME/$f" "$BACKUP_DIR/safari-browser/" 2>/dev/null || {
+        if [[ "$f" == "History.db"* ]] || [[ "$f" == "CloudTabs"* ]]; then
+          warn "Cannot read $f — Full Disk Access may be required for Terminal"
+        else
+          warn "Failed to copy $f"
+        fi
+      }
+    fi
+  done
+
+  # Reading List
+  if [ -d "$SAFARI_HOME/ReadingList" ]; then
+    if ! $DRY_RUN; then
+      tar -czf "$BACKUP_DIR/safari-browser/ReadingList.tar.gz" \
+        -C "$SAFARI_HOME" ReadingList/ 2>/dev/null || warn "Failed to archive ReadingList"
+    else
+      echo "  [dry-run] tar -czf safari-browser/ReadingList.tar.gz"
+    fi
+  fi
+
+  # Safari Extensions (legacy; modern extensions are App Store managed)
+  if [ -d "$SAFARI_HOME/Extensions" ] && [ "$(ls -A "$SAFARI_HOME/Extensions" 2>/dev/null)" ]; then
+    if ! $DRY_RUN; then
+      tar -czf "$BACKUP_DIR/safari-browser/Extensions.tar.gz" \
+        -C "$SAFARI_HOME" Extensions/ 2>/dev/null || warn "Failed to archive Safari Extensions"
+    else
+      echo "  [dry-run] tar -czf safari-browser/Extensions.tar.gz"
+    fi
+  fi
+
+  # Safari preferences plist
+  SAFARI_PLIST="$HOME/Library/Preferences/com.apple.Safari.plist"
+  if [ -f "$SAFARI_PLIST" ]; then
+    if ! $DRY_RUN; then
+      defaults export com.apple.Safari "$BACKUP_DIR/safari-browser/safari-preferences.plist" 2>/dev/null || {
+        # Fallback: direct copy with plutil conversion
+        plutil -convert xml1 -o "$BACKUP_DIR/safari-browser/safari-preferences.plist" \
+          "$SAFARI_PLIST" 2>/dev/null || warn "Failed to export Safari preferences"
+      }
+    else
+      echo "  [dry-run] defaults export com.apple.Safari safari-preferences.plist"
+    fi
+  fi
+
+  # List installed Safari App Extensions (informational)
+  if ! $DRY_RUN; then
+    pluginkit -mA 2>/dev/null | grep -i "safari" > "$BACKUP_DIR/safari-browser/app-extensions.txt" 2>/dev/null || true
+  fi
+
+  # Check if we actually copied anything (Full Disk Access issue)
+  if ! $DRY_RUN; then
+    file_count=$(find "$BACKUP_DIR/safari-browser" -type f 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$file_count" -le 1 ]; then
+      record_warning "SAFARI_FDA" "Very few Safari files backed up — Terminal may need Full Disk Access in System Settings > Privacy & Security" "user_action"
+      warn "Very few Safari files backed up — grant Full Disk Access to Terminal and retry"
+    fi
+  fi
+fi
+
+echo "  Safari done."
+
+end_step
+fi
+
+# ============================================================
 # CURSOR IDE
 # ============================================================
-if begin_step 12 "cursor_ide" "Backing up Cursor IDE settings"; then
+if begin_step 14 "cursor_ide" "Backing up Cursor IDE settings"; then
 
 CURSOR_HOME="$HOME/Library/Application Support/Cursor"
 
@@ -1097,7 +1372,7 @@ fi
 # ============================================================
 # DATABASE TOOLS (DataGrip + psql)
 # ============================================================
-if begin_step 13 "db_tools" "Backing up database tools config"; then
+if begin_step 15 "db_tools" "Backing up database tools config"; then
 
 # --- DataGrip ---
 DATAGRIP_BASE="$HOME/Library/Application Support/JetBrains"
@@ -1156,7 +1431,7 @@ fi
 # ============================================================
 # DESKTOP APPS
 # ============================================================
-if begin_step 14 "desktop_apps" "Backing up desktop app preferences"; then
+if begin_step 16 "desktop_apps" "Backing up desktop app preferences"; then
 
 # iTerm2
 if [ -f "$HOME/Library/Preferences/com.googlecode.iterm2.plist" ]; then
@@ -1231,7 +1506,7 @@ fi
 # ============================================================
 # GITHUB REPOS
 # ============================================================
-if begin_step 15 "github_repos" "Backing up ~/GitHub repositories"; then
+if begin_step 17 "github_repos" "Backing up ~/GitHub repositories"; then
 
 GITHUB_DIR="$HOME/GitHub"
 if [ ! -d "$GITHUB_DIR" ]; then
@@ -1272,7 +1547,7 @@ fi
 # ============================================================
 # MANIFEST
 # ============================================================
-if begin_step 16 "manifest" "Generating manifest"; then
+if begin_step 18 "manifest" "Generating manifest"; then
 
 if ! $DRY_RUN; then
   backup_size=$(du -sh "$BACKUP_DIR" | cut -f1)
@@ -1298,6 +1573,8 @@ if ! $DRY_RUN; then
     "homebrew": "$(du -sh "$BACKUP_DIR/homebrew" 2>/dev/null | cut -f1)",
     "volta": "$(du -sh "$BACKUP_DIR/volta" 2>/dev/null | cut -f1)",
     "edge_browser": "$(du -sh "$BACKUP_DIR/edge-browser" 2>/dev/null | cut -f1)",
+    "chrome_browser": "$(du -sh "$BACKUP_DIR/chrome-browser" 2>/dev/null | cut -f1)",
+    "safari_browser": "$(du -sh "$BACKUP_DIR/safari-browser" 2>/dev/null | cut -f1)",
     "cursor_ide": "$(du -sh "$BACKUP_DIR/cursor-ide" 2>/dev/null | cut -f1)",
     "db_tools": "$(du -sh "$BACKUP_DIR/db-tools" 2>/dev/null | cut -f1)",
     "desktop_apps": "$(du -sh "$BACKUP_DIR/desktop-apps" 2>/dev/null | cut -f1)",
@@ -1313,7 +1590,7 @@ fi
 # ============================================================
 # RESTORE GUIDE FOR THE BACKUP FOLDER
 # ============================================================
-if begin_step 17 "restore_guide" "Generating RESTORE-GUIDE.md"; then
+if begin_step 19 "restore_guide" "Generating RESTORE-GUIDE.md"; then
 
 CURRENT_USER=$(whoami)
 CURRENT_HOST=$(hostname)
@@ -1378,6 +1655,26 @@ Each profile is stored as individual files + tar.gz archives for directories.
 Excludes cookies, login data, caches, and service workers.
 If Edge was running during backup, \`edge-browser/open-tabs.json\` contains all open tab URLs and titles per window.
 
+### Google Chrome
+Browser profiles including bookmarks, settings, extensions, history, collections, and sessions.
+Same structure as Edge — each profile stored as individual files + tar.gz archives for directories.
+Excludes cookies, login data, caches, and service workers.
+If Chrome was running during backup, \`chrome-browser/open-tabs.json\` contains all open tab URLs and titles per window.
+
+### Safari
+- **Bookmarks.plist**: Safari bookmarks
+- **History.db**: Browsing history (may require Full Disk Access to read)
+- **TopSites.plist**: Frequently visited sites
+- **LastSession.plist**: Last session state
+- **Downloads.plist**: Download history
+- **CloudTabs.db**: iCloud tabs data
+- **ReadingList/**: Saved reading list items (tar.gz)
+- **Extensions/**: Legacy Safari extensions (tar.gz; modern extensions are App Store managed)
+- **safari-preferences.plist**: Safari settings (exported via \`defaults export\`)
+- **app-extensions.txt**: List of installed Safari App Extensions
+- **open-tabs.json**: Open tab URLs and titles per window (if Safari was running)
+NOTE: Safari data access requires Full Disk Access for Terminal. If files are missing, grant access in System Settings > Privacy & Security > Full Disk Access.
+
 ### Cursor IDE
 - **settings.json**: Editor settings and preferences
 - **keybindings.json**: Custom keyboard shortcuts
@@ -1408,6 +1705,9 @@ If Edge was running during backup, \`edge-browser/open-tabs.json\` contains all 
 - \`db-tools/psql/pgpass\` — PostgreSQL passwords
 - \`edge-browser/*/History\` — Browsing history
 - \`edge-browser/*/Web Data\` — Autofill and form data
+- \`chrome-browser/*/History\` — Chrome browsing history
+- \`chrome-browser/*/Web Data\` — Chrome autofill and form data
+- \`safari-browser/History.db\` — Safari browsing history
 
 **Encrypt this folder before uploading to cloud storage.**
 
@@ -1425,7 +1725,7 @@ fi
 # ============================================================
 # COPY SCRIPTS INTO BACKUP
 # ============================================================
-if begin_step 18 "copy_scripts" "Copying scripts into backup"; then
+if begin_step 20 "copy_scripts" "Copying scripts into backup"; then
 
 run_cmd cp "$SCRIPT_DIR/backup.sh" "$BACKUP_DIR/"
 if ! $DRY_RUN; then
@@ -1440,7 +1740,7 @@ fi
 # ============================================================
 # PERMISSIONS
 # ============================================================
-if begin_step 19 "permissions" "Setting permissions on sensitive files"; then
+if begin_step 21 "permissions" "Setting permissions on sensitive files"; then
 
 if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/codex-cli/auth.json" 2>/dev/null || record_warning "CHMOD" "auth.json not found for chmod" "transient"
@@ -1453,6 +1753,10 @@ if ! $DRY_RUN; then
   find "$BACKUP_DIR/conductor/workspaces" -name "*.env" -exec chmod 600 {} \; 2>/dev/null || true
   find "$BACKUP_DIR/edge-browser" -name "History" -exec chmod 600 {} \; 2>/dev/null || true
   find "$BACKUP_DIR/edge-browser" -name "Web Data" -exec chmod 600 {} \; 2>/dev/null || true
+  find "$BACKUP_DIR/chrome-browser" -name "History" -exec chmod 600 {} \; 2>/dev/null || true
+  find "$BACKUP_DIR/chrome-browser" -name "Web Data" -exec chmod 600 {} \; 2>/dev/null || true
+  chmod 600 "$BACKUP_DIR/safari-browser/History.db" 2>/dev/null || true
+  chmod 600 "$BACKUP_DIR/safari-browser/History.db-wal" 2>/dev/null || true
 else
   echo "  [dry-run] Would chmod 600 sensitive files"
 fi
@@ -1574,6 +1878,8 @@ if ! $DRY_RUN && ! $ENCRYPT; then
   echo "    - DataGrip license key (db-tools/datagrip/datagrip.key)"
   echo "    - PostgreSQL passwords (db-tools/psql/pgpass)"
   echo "    - Edge browsing history and form data (edge-browser/*/History, Web Data)"
+  echo "    - Chrome browsing history and form data (chrome-browser/*/History, Web Data)"
+  echo "    - Safari browsing history (safari-browser/History.db)"
   echo ""
   echo -e "  ${RED}ENCRYPT BEFORE UPLOADING TO GOOGLE DRIVE.${NC}"
   echo "  Example: zip -er workspace-backup.zip $BACKUP_DIR"
