@@ -1856,6 +1856,79 @@ end_step
 fi
 
 # ============================================================
+# STEP 20: MACOS DEVELOPER DEFAULTS
+# ============================================================
+if begin_step 20 "macos_defaults" "Restoring macOS developer preferences"; then
+
+if [ ! -d "$BACKUP_DIR/macos-defaults" ]; then
+  echo "  No macos-defaults directory in backup — skipping."
+else
+  if $DRY_RUN; then
+    echo "  [dry-run] Would import macOS developer preferences"
+  else
+    # Dock preferences
+    if [ -f "$BACKUP_DIR/macos-defaults/dock.plist" ]; then
+      defaults import com.apple.dock "$BACKUP_DIR/macos-defaults/dock.plist" 2>/dev/null || warn "Failed to import Dock preferences"
+    fi
+
+    # Finder preferences
+    if [ -f "$BACKUP_DIR/macos-defaults/finder.plist" ]; then
+      defaults import com.apple.finder "$BACKUP_DIR/macos-defaults/finder.plist" 2>/dev/null || warn "Failed to import Finder preferences"
+    fi
+
+    # Trackpad preferences
+    if [ -f "$BACKUP_DIR/macos-defaults/trackpad.plist" ]; then
+      defaults import com.apple.AppleMultitouchTrackpad "$BACKUP_DIR/macos-defaults/trackpad.plist" 2>/dev/null || true
+    fi
+
+    # Keyboard shortcuts
+    if [ -f "$BACKUP_DIR/macos-defaults/symbolichotkeys.plist" ]; then
+      pre_restore_backup "$HOME/Library/Preferences/com.apple.symbolichotkeys.plist"
+      safe_cp "$BACKUP_DIR/macos-defaults/symbolichotkeys.plist" "$HOME/Library/Preferences/com.apple.symbolichotkeys.plist" 2>/dev/null || warn "Failed to restore keyboard shortcuts"
+    fi
+
+    # Custom text key bindings
+    if [ -f "$BACKUP_DIR/macos-defaults/DefaultKeyBinding.dict" ]; then
+      safe_mkdir "$HOME/Library/KeyBindings"
+      pre_restore_backup "$HOME/Library/KeyBindings/DefaultKeyBinding.dict"
+      safe_cp "$BACKUP_DIR/macos-defaults/DefaultKeyBinding.dict" "$HOME/Library/KeyBindings/" 2>/dev/null || true
+    fi
+
+    # NSGlobalDomain developer keys
+    if [ -f "$BACKUP_DIR/macos-defaults/global-domain.json" ]; then
+      echo "  Restoring NSGlobalDomain developer keys..."
+      for key in KeyRepeat InitialKeyRepeat AppleShowAllExtensions \
+                 ApplePressAndHoldEnabled NSAutomaticSpellingCorrectionEnabled \
+                 NSAutomaticCapitalizationEnabled NSAutomaticDashSubstitutionEnabled \
+                 NSAutomaticQuoteSubstitutionEnabled NSAutomaticPeriodSubstitutionEnabled \
+                 com.apple.swipescrolldirection; do
+        val=$(jq -r ".[\"$key\"] // empty" "$BACKUP_DIR/macos-defaults/global-domain.json" 2>/dev/null)
+        if [ -n "$val" ]; then
+          # Detect integer vs string/bool
+          if [[ "$val" =~ ^-?[0-9]+$ ]]; then
+            defaults write NSGlobalDomain "$key" -int "$val" 2>/dev/null || true
+          elif [[ "$val" == "true" ]] || [[ "$val" == "false" ]]; then
+            defaults write NSGlobalDomain "$key" -bool "$val" 2>/dev/null || true
+          else
+            defaults write NSGlobalDomain "$key" "$val" 2>/dev/null || true
+          fi
+        fi
+      done
+    fi
+
+    # Restart Dock and Finder to apply
+    killall Dock 2>/dev/null || true
+    killall Finder 2>/dev/null || true
+
+    echo "  macOS developer preferences restored."
+    echo "  NOTE: Some settings may require logout/restart to take effect."
+  fi
+fi
+
+end_step
+fi
+
+# ============================================================
 # POST-RESTORE VALIDATION
 # ============================================================
 if [ -z "$ONLY_STEP" ]; then
@@ -1993,7 +2066,9 @@ echo "      Install missing pipx packages if needed"
 echo ""
 echo "  17. Open Raycast and reinstall extensions from the Raycast Store"
 echo ""
-echo "  18. Source your shell config:"
+echo "  18. Log out and back in for macOS developer preferences to take full effect"
+echo ""
+echo "  19. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
 

@@ -1884,6 +1884,57 @@ end_step
 fi
 
 # ============================================================
+# MACOS DEVELOPER DEFAULTS
+# ============================================================
+if begin_step 22 "macos_defaults" "Backing up macOS developer preferences"; then
+
+if ! $DRY_RUN; then
+  # Dock preferences (autohide, size, hot corners, show-recents)
+  defaults export com.apple.dock "$BACKUP_DIR/macos-defaults/dock.plist" 2>/dev/null || warn "Failed to export Dock preferences"
+
+  # Finder preferences (show hidden files, show extensions, default view)
+  defaults export com.apple.finder "$BACKUP_DIR/macos-defaults/finder.plist" 2>/dev/null || warn "Failed to export Finder preferences"
+
+  # Trackpad preferences (gestures, sensitivity)
+  defaults export com.apple.AppleMultitouchTrackpad "$BACKUP_DIR/macos-defaults/trackpad.plist" 2>/dev/null || true
+
+  # Keyboard shortcuts
+  if [ -f "$HOME/Library/Preferences/com.apple.symbolichotkeys.plist" ]; then
+    plutil -convert xml1 -o "$BACKUP_DIR/macos-defaults/symbolichotkeys.plist" \
+      "$HOME/Library/Preferences/com.apple.symbolichotkeys.plist" 2>/dev/null || warn "Failed to export keyboard shortcuts"
+  fi
+
+  # Custom text key bindings
+  copy_if_exists "$HOME/Library/KeyBindings/DefaultKeyBinding.dict" "$BACKUP_DIR/macos-defaults/"
+
+  # Developer-critical NSGlobalDomain keys as JSON
+  {
+    echo "{"
+    for key in KeyRepeat InitialKeyRepeat AppleShowAllExtensions \
+               ApplePressAndHoldEnabled NSAutomaticSpellingCorrectionEnabled \
+               NSAutomaticCapitalizationEnabled NSAutomaticDashSubstitutionEnabled \
+               NSAutomaticQuoteSubstitutionEnabled NSAutomaticPeriodSubstitutionEnabled \
+               com.apple.swipescrolldirection; do
+      val=$(defaults read NSGlobalDomain "$key" 2>/dev/null)
+      if [ -n "$val" ]; then
+        echo "  \"$key\": $val,"
+      fi
+    done
+    echo "  \"_exported\": \"$(date +%Y-%m-%dT%H:%M:%S)\""
+    echo "}"
+  } > "$BACKUP_DIR/macos-defaults/global-domain.json"
+
+  echo "  Exported Dock, Finder, trackpad, keyboard, and global developer preferences."
+else
+  echo "  [dry-run] Would export macOS developer preferences via defaults"
+fi
+
+echo "  macOS defaults done."
+
+end_step
+fi
+
+# ============================================================
 # MANIFEST
 # ============================================================
 if begin_step 23 "manifest" "Generating manifest"; then
@@ -1921,7 +1972,8 @@ if ! $DRY_RUN; then
     "vscode": "$(du -sh "$BACKUP_DIR/vscode" 2>/dev/null | cut -f1)",
     "docker": "$(du -sh "$BACKUP_DIR/docker" 2>/dev/null | cut -f1)",
     "python_tools": "$(du -sh "$BACKUP_DIR/python-tools" 2>/dev/null | cut -f1)",
-    "raycast": "$(du -sh "$BACKUP_DIR/raycast" 2>/dev/null | cut -f1)"
+    "raycast": "$(du -sh "$BACKUP_DIR/raycast" 2>/dev/null | cut -f1)",
+    "macos_defaults": "$(du -sh "$BACKUP_DIR/macos-defaults" 2>/dev/null | cut -f1)"
   }
 }
 MANIFEST
@@ -2075,6 +2127,18 @@ Excludes: VM images, container data, build cache.
 - **script-commands/**: User-created Raycast script commands
 - **raycast-preferences.plist**: Raycast preferences (via \`defaults export\`)
 NOTE: Raycast extensions are installed via the Raycast Store UI — the extension list is informational.
+
+### macOS Developer Defaults
+- **dock.plist**: Dock preferences (autohide, size, hot corners, show-recents)
+- **finder.plist**: Finder preferences (show hidden files, show extensions, default view)
+- **trackpad.plist**: Trackpad gestures and sensitivity
+- **symbolichotkeys.plist**: Custom keyboard shortcuts (Mission Control, Spaces)
+- **DefaultKeyBinding.dict**: Custom text key bindings
+- **global-domain.json**: Developer-critical NSGlobalDomain keys:
+  - \`KeyRepeat\`, \`InitialKeyRepeat\` — Fast key repeat (for Vim/editor users)
+  - \`ApplePressAndHoldEnabled\` — Disable accent menu for key repeat
+  - Autocorrect, smart quotes, smart dashes, auto-capitalization toggles
+  - Natural scroll direction setting
 
 ## SENSITIVE FILES
 - \`codex-cli/auth.json\` — OAuth JWT + refresh tokens
