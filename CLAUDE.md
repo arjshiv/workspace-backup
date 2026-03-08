@@ -1,6 +1,6 @@
 # workspace-backup
 
-Backup and restore scripts for migrating a full AI dev environment (Claude Code, Codex CLI, Conductor, Microsoft Edge, Google Chrome, Safari, Cursor IDE, Desktop Apps) between Macs.
+Backup and restore scripts for migrating a full AI dev environment (Claude Code, Codex CLI, Conductor, Microsoft Edge, Google Chrome, Safari, Cursor IDE, VS Code, Docker, Python tools, Raycast, Desktop Apps) between Macs.
 
 ## Structure
 
@@ -22,7 +22,12 @@ Backup and restore scripts for migrating a full AI dev environment (Claude Code,
 - AWS credentials (`~/.aws/`) and npm config (`~/.npmrc`) are included in the shell-env backup with `chmod 600` applied to sensitive files.
 - DataGrip settings are backed up from the latest `~/Library/Application Support/JetBrains/DataGrip*/` version. Includes `options/` (settings XMLs, database driver configs), `workspace/` (data source connections), `consoles/` (SQL console history), `codestyles/`, `tasks/`, `jdbc-drivers/`, JVM options, and the license key. Plugins and caches are excluded (regenerated on launch). The license key (`datagrip.key`) and `.pgpass` get `chmod 600`.
 - PostgreSQL client config (`~/.psqlrc`, `~/.psql_history`, `~/.pgpass`, `~/.pg_service.conf`, `~/.postgresql/`) is backed up alongside DataGrip in the `db-tools` step.
-- Sensitive files (SSH keys, OAuth tokens, .env files, browser history, AWS credentials, .npmrc) get `chmod 600` in the backup. The script warns to encrypt before uploading to cloud storage.
+- VS Code is backed up with the same pattern as Cursor IDE: settings.json, keybindings.json, snippets, extension list (via `code --list-extensions` or directory fallback), workspace metadata (workspaceStorage/workspace.json), and recent workspaces DB (globalStorage/state.vscdb via sqlite3 .backup).
+- Docker Desktop config: `~/.docker/` (config.json, daemon.json, contexts/, compose/) plus Docker Desktop settings (settings-store.json, features.json). Docker images, containers, and build cache are excluded.
+- Python toolchain: pyenv versions and global version, Poetry config/auth, pip.conf, uv.toml, pipx packages JSON, .condarc. Restore reinstalls pyenv versions and pipx packages automatically.
+- Raycast: config.json (auth), AI presets, extension list from installed package.json files, user script commands, preferences plist. Extensions are Raycast Store managed — the list is informational.
+- macOS developer defaults: Dock, Finder, trackpad preferences via `defaults export`; keyboard shortcuts (symbolichotkeys.plist); custom key bindings; NSGlobalDomain developer keys (KeyRepeat, autocorrect toggles, etc.) as JSON. Restore imports and restarts Dock/Finder.
+- Sensitive files (SSH keys, OAuth tokens, .env files, browser history, AWS credentials, .npmrc, Docker auth, Poetry auth, Raycast token) get `chmod 600` in the backup. The script warns to encrypt before uploading to cloud storage.
 
 ## Agent invocation pattern
 
@@ -38,9 +43,9 @@ Both scripts produce a `results.json` alongside the backup with structured per-s
    - `user_action` — ask the user (e.g. quit Edge/Chrome/Safari, re-authenticate)
 6. Retry: `bash backup.sh --resume-from=homebrew --yes`
 
-Step names for `--resume-from` (backup.sh): `create_dirs`, `claude_code`, `project_configs`, `codex_cli`, `shared_agents`, `conductor_worktrees`, `conductor_db`, `shell_env`, `homebrew`, `volta`, `edge`, `chrome`, `safari`, `cursor_ide`, `db_tools`, `desktop_apps`, `github_repos`, `manifest`, `restore_guide`, `copy_scripts`, `permissions`
+Step names for `--resume-from` (backup.sh): `create_dirs`, `claude_code`, `project_configs`, `codex_cli`, `shared_agents`, `conductor_worktrees`, `conductor_db`, `shell_env`, `homebrew`, `volta`, `edge`, `chrome`, `safari`, `cursor_ide`, `db_tools`, `desktop_apps`, `github_repos`, `vscode`, `docker`, `python_tools`, `raycast`, `macos_defaults`, `manifest`, `restore_guide`, `copy_scripts`, `permissions`
 
-Step names for `--resume-from` (restore.sh): `prerequisites`, `shell_env`, `volta`, `claude_code`, `project_configs`, `codex_cli`, `conductor_worktrees`, `conductor_db`, `edge`, `chrome`, `safari`, `cursor_ide`, `db_tools`, `github_repos`, `desktop_apps`
+Step names for `--resume-from` (restore.sh): `prerequisites`, `shell_env`, `volta`, `claude_code`, `project_configs`, `codex_cli`, `conductor_worktrees`, `conductor_db`, `edge`, `chrome`, `safari`, `cursor_ide`, `db_tools`, `github_repos`, `desktop_apps`, `vscode`, `docker`, `python_tools`, `raycast`, `macos_defaults`
 
 ## Adding a new backup section
 
