@@ -1755,6 +1755,76 @@ end_step
 fi
 
 # ============================================================
+# PYTHON TOOLS
+# ============================================================
+if begin_step 20 "python_tools" "Backing up Python toolchain config"; then
+
+python_found=false
+
+# pyenv
+if command -v pyenv &>/dev/null; then
+  python_found=true
+  copy_if_exists "$HOME/.pyenv/version" "$BACKUP_DIR/python-tools/"
+  if ! $DRY_RUN; then
+    pyenv versions --bare > "$BACKUP_DIR/python-tools/pyenv-versions.txt" 2>/dev/null || warn "Failed to list pyenv versions"
+  else
+    echo "  [dry-run] pyenv versions --bare > pyenv-versions.txt"
+  fi
+elif [ -f "$HOME/.pyenv/version" ]; then
+  python_found=true
+  copy_if_exists "$HOME/.pyenv/version" "$BACKUP_DIR/python-tools/"
+fi
+
+copy_if_exists "$HOME/.python-version" "$BACKUP_DIR/python-tools/"
+
+# Poetry config
+POETRY_CONFIG="$HOME/Library/Application Support/pypoetry"
+if [ -d "$POETRY_CONFIG" ]; then
+  python_found=true
+  copy_if_exists "$POETRY_CONFIG/config.toml" "$BACKUP_DIR/python-tools/"
+  copy_if_exists "$POETRY_CONFIG/auth.toml" "$BACKUP_DIR/python-tools/"
+fi
+
+# pip config
+for pip_conf in "$HOME/.config/pip/pip.conf" "$HOME/Library/Application Support/pip/pip.conf"; do
+  if [ -f "$pip_conf" ]; then
+    python_found=true
+    if ! $DRY_RUN; then
+      cp "$pip_conf" "$BACKUP_DIR/python-tools/pip.conf" 2>/dev/null || warn "Failed to copy pip.conf"
+    fi
+    break
+  fi
+done
+
+# uv config
+if [ -f "$HOME/.config/uv/uv.toml" ]; then
+  python_found=true
+  copy_if_exists "$HOME/.config/uv/uv.toml" "$BACKUP_DIR/python-tools/"
+fi
+
+# pipx packages
+if command -v pipx &>/dev/null; then
+  python_found=true
+  if ! $DRY_RUN; then
+    pipx list --json > "$BACKUP_DIR/python-tools/pipx-packages.json" 2>/dev/null || warn "Failed to list pipx packages"
+  else
+    echo "  [dry-run] pipx list --json > pipx-packages.json"
+  fi
+fi
+
+# Conda config
+copy_if_exists "$HOME/.condarc" "$BACKUP_DIR/python-tools/"
+
+if ! $python_found; then
+  warn "No Python toolchain config found — skipping"
+fi
+
+echo "  Python tools done."
+
+end_step
+fi
+
+# ============================================================
 # MANIFEST
 # ============================================================
 if begin_step 23 "manifest" "Generating manifest"; then
@@ -1790,7 +1860,8 @@ if ! $DRY_RUN; then
     "desktop_apps": "$(du -sh "$BACKUP_DIR/desktop-apps" 2>/dev/null | cut -f1)",
     "github_repos": "$(du -sh "$BACKUP_DIR/github-repos" 2>/dev/null | cut -f1)",
     "vscode": "$(du -sh "$BACKUP_DIR/vscode" 2>/dev/null | cut -f1)",
-    "docker": "$(du -sh "$BACKUP_DIR/docker" 2>/dev/null | cut -f1)"
+    "docker": "$(du -sh "$BACKUP_DIR/docker" 2>/dev/null | cut -f1)",
+    "python_tools": "$(du -sh "$BACKUP_DIR/python-tools" 2>/dev/null | cut -f1)"
   }
 }
 MANIFEST
@@ -1927,6 +1998,16 @@ NOTE: Safari data access requires Full Disk Access for Terminal. If files are mi
 - **docker-contexts.json**: Snapshot of \`docker context ls\` output
 Excludes: VM images, container data, build cache.
 
+### Python Tools
+- **pyenv-versions.txt**: List of installed pyenv Python versions (for reinstalling)
+- **version**: pyenv global Python version setting
+- **config.toml**: Poetry global configuration
+- **auth.toml**: Poetry private registry auth
+- **pip.conf**: pip configuration (index URLs, trusted hosts)
+- **uv.toml**: uv package manager config
+- **pipx-packages.json**: List of pipx-installed CLI tools
+- **.condarc**: Conda configuration
+
 ## SENSITIVE FILES
 - \`codex-cli/auth.json\` — OAuth JWT + refresh tokens
 - \`shell-env/ssh/id_ed25519\` — SSH private key
@@ -1942,6 +2023,7 @@ Excludes: VM images, container data, build cache.
 - \`chrome-browser/*/Web Data\` — Chrome autofill and form data
 - \`safari-browser/History.db\` — Safari browsing history
 - \`docker/config.json\` — Docker registry auth tokens
+- \`python-tools/auth.toml\` — Poetry private registry credentials
 
 **Encrypt this folder before uploading to cloud storage.**
 
@@ -1992,6 +2074,7 @@ if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/safari-browser/History.db" 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/safari-browser/History.db-wal" 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/docker/config.json" 2>/dev/null || true
+  chmod 600 "$BACKUP_DIR/python-tools/auth.toml" 2>/dev/null || true
 else
   echo "  [dry-run] Would chmod 600 sensitive files"
 fi
@@ -2116,6 +2199,7 @@ if ! $DRY_RUN && ! $ENCRYPT; then
   echo "    - Chrome browsing history and form data (chrome-browser/*/History, Web Data)"
   echo "    - Safari browsing history (safari-browser/History.db)"
   echo "    - Docker registry auth tokens (docker/config.json)"
+  echo "    - Poetry private registry credentials (python-tools/auth.toml)"
   echo ""
   echo -e "  ${RED}ENCRYPT BEFORE UPLOADING TO GOOGLE DRIVE.${NC}"
   echo "  Example: zip -er workspace-backup.zip $BACKUP_DIR"

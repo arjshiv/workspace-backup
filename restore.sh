@@ -1714,6 +1714,95 @@ end_step
 fi
 
 # ============================================================
+# STEP 18: PYTHON TOOLS
+# ============================================================
+if begin_step 18 "python_tools" "Restoring Python toolchain config"; then
+
+if [ ! -d "$BACKUP_DIR/python-tools" ]; then
+  echo "  No python-tools directory in backup — skipping."
+else
+  # pyenv
+  if [ -f "$BACKUP_DIR/python-tools/version" ]; then
+    safe_mkdir "$HOME/.pyenv"
+    pre_restore_backup "$HOME/.pyenv/version"
+    safe_cp "$BACKUP_DIR/python-tools/version" "$HOME/.pyenv/" 2>/dev/null || true
+  fi
+  if [ -f "$BACKUP_DIR/python-tools/.python-version" ]; then
+    pre_restore_backup "$HOME/.python-version"
+    safe_cp "$BACKUP_DIR/python-tools/.python-version" "$HOME/" 2>/dev/null || true
+  fi
+
+  # Install missing pyenv versions
+  if [ -f "$BACKUP_DIR/python-tools/pyenv-versions.txt" ] && command -v pyenv &>/dev/null; then
+    echo "  Checking pyenv versions..."
+    while IFS= read -r ver; do
+      [ -z "$ver" ] && continue
+      if ! pyenv versions --bare 2>/dev/null | grep -qx "$ver"; then
+        if $DRY_RUN; then
+          echo "  [dry-run] pyenv install $ver"
+        else
+          echo "  Installing Python $ver via pyenv..."
+          pyenv install "$ver" 2>/dev/null || warn "Failed to install Python $ver — install manually with: pyenv install $ver"
+        fi
+      fi
+    done < "$BACKUP_DIR/python-tools/pyenv-versions.txt"
+  fi
+
+  # Poetry config
+  POETRY_CONFIG="$HOME/Library/Application Support/pypoetry"
+  if [ -f "$BACKUP_DIR/python-tools/config.toml" ]; then
+    safe_mkdir "$POETRY_CONFIG"
+    pre_restore_backup "$POETRY_CONFIG/config.toml"
+    safe_cp "$BACKUP_DIR/python-tools/config.toml" "$POETRY_CONFIG/" 2>/dev/null || true
+  fi
+  if [ -f "$BACKUP_DIR/python-tools/auth.toml" ]; then
+    safe_mkdir "$POETRY_CONFIG"
+    pre_restore_backup "$POETRY_CONFIG/auth.toml"
+    safe_cp "$BACKUP_DIR/python-tools/auth.toml" "$POETRY_CONFIG/" 2>/dev/null || true
+    chmod 600 "$POETRY_CONFIG/auth.toml" 2>/dev/null || true
+  fi
+
+  # pip config
+  if [ -f "$BACKUP_DIR/python-tools/pip.conf" ]; then
+    safe_mkdir "$HOME/.config/pip"
+    pre_restore_backup "$HOME/.config/pip/pip.conf"
+    safe_cp "$BACKUP_DIR/python-tools/pip.conf" "$HOME/.config/pip/" 2>/dev/null || true
+  fi
+
+  # uv config
+  if [ -f "$BACKUP_DIR/python-tools/uv.toml" ]; then
+    safe_mkdir "$HOME/.config/uv"
+    pre_restore_backup "$HOME/.config/uv/uv.toml"
+    safe_cp "$BACKUP_DIR/python-tools/uv.toml" "$HOME/.config/uv/" 2>/dev/null || true
+  fi
+
+  # pipx packages
+  if [ -f "$BACKUP_DIR/python-tools/pipx-packages.json" ] && command -v pipx &>/dev/null; then
+    echo "  Reinstalling pipx packages..."
+    if $DRY_RUN; then
+      pkg_count=$(jq '.venvs | keys | length' "$BACKUP_DIR/python-tools/pipx-packages.json" 2>/dev/null || echo 0)
+      echo "  [dry-run] Would install $pkg_count pipx packages"
+    else
+      jq -r '.venvs | keys[]' "$BACKUP_DIR/python-tools/pipx-packages.json" 2>/dev/null | while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        pipx install "$pkg" 2>/dev/null || warn "Failed to install pipx package: $pkg"
+      done
+    fi
+  fi
+
+  # Conda config
+  if [ -f "$BACKUP_DIR/python-tools/.condarc" ]; then
+    pre_restore_backup "$HOME/.condarc"
+    safe_cp "$BACKUP_DIR/python-tools/.condarc" "$HOME/" 2>/dev/null || true
+  fi
+
+  echo "  Python tools restored."
+fi
+
+end_step
+fi
+
+# ============================================================
 # POST-RESTORE VALIDATION
 # ============================================================
 if [ -z "$ONLY_STEP" ]; then
@@ -1846,7 +1935,10 @@ echo "  14. Launch VS Code and verify extensions/settings are restored"
 echo ""
 echo "  15. Restart Docker Desktop to pick up restored settings"
 echo ""
-echo "  16. Source your shell config:"
+echo "  16. Verify Python versions: pyenv versions"
+echo "      Install missing pipx packages if needed"
+echo ""
+echo "  17. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
 
