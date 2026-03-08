@@ -1662,6 +1662,58 @@ end_step
 fi
 
 # ============================================================
+# STEP 17: DOCKER
+# ============================================================
+if begin_step 17 "docker" "Restoring Docker Desktop config"; then
+
+if [ ! -d "$BACKUP_DIR/docker" ]; then
+  echo "  No docker directory in backup — skipping."
+else
+  DOCKER_HOME="$HOME/.docker"
+  DOCKER_DESKTOP="$HOME/Library/Group Containers/group.com.docker"
+
+  safe_mkdir "$DOCKER_HOME"
+
+  # Docker CLI config
+  for f in config.json daemon.json; do
+    if [ -f "$BACKUP_DIR/docker/$f" ]; then
+      pre_restore_backup "$DOCKER_HOME/$f"
+      safe_cp "$BACKUP_DIR/docker/$f" "$DOCKER_HOME/" 2>/dev/null || warn "Failed to restore Docker $f"
+    fi
+  done
+
+  # Docker contexts
+  if [ -d "$BACKUP_DIR/docker/contexts" ]; then
+    safe_cp -R "$BACKUP_DIR/docker/contexts" "$DOCKER_HOME/" 2>/dev/null || warn "Failed to restore Docker contexts"
+  fi
+
+  # Docker Compose config
+  if [ -d "$BACKUP_DIR/docker/compose" ]; then
+    safe_cp -R "$BACKUP_DIR/docker/compose" "$DOCKER_HOME/" 2>/dev/null || true
+  fi
+
+  # Docker Desktop settings
+  if [ -d "$DOCKER_DESKTOP" ]; then
+    for f in settings-store.json features.json; do
+      if [ -f "$BACKUP_DIR/docker/$f" ]; then
+        pre_restore_backup "$DOCKER_DESKTOP/$f"
+        safe_cp "$BACKUP_DIR/docker/$f" "$DOCKER_DESKTOP/" 2>/dev/null || warn "Failed to restore Docker Desktop $f"
+      fi
+    done
+  fi
+
+  chmod 600 "$DOCKER_HOME/config.json" 2>/dev/null || true
+
+  echo "  Docker config restored."
+  if pgrep -x "Docker" >/dev/null 2>&1 || pgrep -x "Docker Desktop" >/dev/null 2>&1; then
+    warn "Docker Desktop is running — restart it to pick up restored settings"
+  fi
+fi
+
+end_step
+fi
+
+# ============================================================
 # POST-RESTORE VALIDATION
 # ============================================================
 if [ -z "$ONLY_STEP" ]; then
@@ -1792,7 +1844,9 @@ echo "  13. Restart iTerm2/Warp/Rectangle to pick up restored preferences"
 echo ""
 echo "  14. Launch VS Code and verify extensions/settings are restored"
 echo ""
-echo "  15. Source your shell config:"
+echo "  15. Restart Docker Desktop to pick up restored settings"
+echo ""
+echo "  16. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
 

@@ -1703,6 +1703,58 @@ end_step
 fi
 
 # ============================================================
+# DOCKER
+# ============================================================
+if begin_step 19 "docker" "Backing up Docker Desktop config"; then
+
+DOCKER_HOME="$HOME/.docker"
+DOCKER_DESKTOP="$HOME/Library/Group Containers/group.com.docker"
+
+if [ ! -d "$DOCKER_HOME" ] && [ ! -d "$DOCKER_DESKTOP" ]; then
+  warn "Docker not installed — skipping"
+else
+  # Docker CLI config
+  copy_if_exists "$DOCKER_HOME/config.json" "$BACKUP_DIR/docker/"
+  copy_if_exists "$DOCKER_HOME/daemon.json" "$BACKUP_DIR/docker/"
+
+  # Docker contexts
+  if [ -d "$DOCKER_HOME/contexts" ]; then
+    if ! $DRY_RUN; then
+      cp -R "$DOCKER_HOME/contexts" "$BACKUP_DIR/docker/" 2>/dev/null || warn "Failed to copy Docker contexts"
+    else
+      echo "  [dry-run] cp -R ~/.docker/contexts $BACKUP_DIR/docker/"
+    fi
+  fi
+
+  # Docker Compose config
+  if [ -d "$DOCKER_HOME/compose" ]; then
+    if ! $DRY_RUN; then
+      cp -R "$DOCKER_HOME/compose" "$BACKUP_DIR/docker/" 2>/dev/null || warn "Failed to copy Docker compose config"
+    else
+      echo "  [dry-run] cp -R ~/.docker/compose $BACKUP_DIR/docker/"
+    fi
+  fi
+
+  # Docker Desktop settings
+  if [ -d "$DOCKER_DESKTOP" ]; then
+    copy_if_exists "$DOCKER_DESKTOP/settings-store.json" "$BACKUP_DIR/docker/"
+    copy_if_exists "$DOCKER_DESKTOP/features.json" "$BACKUP_DIR/docker/"
+  fi
+
+  # Capture docker context list for reference
+  if command -v docker &>/dev/null; then
+    if ! $DRY_RUN; then
+      docker context ls --format json > "$BACKUP_DIR/docker/docker-contexts.json" 2>/dev/null || true
+    fi
+  fi
+fi
+
+echo "  Docker done."
+
+end_step
+fi
+
+# ============================================================
 # MANIFEST
 # ============================================================
 if begin_step 23 "manifest" "Generating manifest"; then
@@ -1737,7 +1789,8 @@ if ! $DRY_RUN; then
     "db_tools": "$(du -sh "$BACKUP_DIR/db-tools" 2>/dev/null | cut -f1)",
     "desktop_apps": "$(du -sh "$BACKUP_DIR/desktop-apps" 2>/dev/null | cut -f1)",
     "github_repos": "$(du -sh "$BACKUP_DIR/github-repos" 2>/dev/null | cut -f1)",
-    "vscode": "$(du -sh "$BACKUP_DIR/vscode" 2>/dev/null | cut -f1)"
+    "vscode": "$(du -sh "$BACKUP_DIR/vscode" 2>/dev/null | cut -f1)",
+    "docker": "$(du -sh "$BACKUP_DIR/docker" 2>/dev/null | cut -f1)"
   }
 }
 MANIFEST
@@ -1864,6 +1917,16 @@ NOTE: Safari data access requires Full Disk Access for Terminal. If files are mi
 - **workspaceStorage/**: Workspace metadata (workspace.json files)
 - **globalStorage/state.vscdb**: Recent workspaces and projects list (SQLite)
 
+### Docker
+- **config.json**: Docker CLI auth config and credential helpers
+- **daemon.json**: Custom Docker daemon settings (registry mirrors, DNS, log drivers)
+- **contexts/**: Named Docker contexts
+- **compose/**: Docker Compose config files
+- **settings-store.json**: Docker Desktop GUI settings (resource limits, Kubernetes toggle)
+- **features.json**: Docker Desktop feature flags
+- **docker-contexts.json**: Snapshot of \`docker context ls\` output
+Excludes: VM images, container data, build cache.
+
 ## SENSITIVE FILES
 - \`codex-cli/auth.json\` — OAuth JWT + refresh tokens
 - \`shell-env/ssh/id_ed25519\` — SSH private key
@@ -1878,6 +1941,7 @@ NOTE: Safari data access requires Full Disk Access for Terminal. If files are mi
 - \`chrome-browser/*/History\` — Chrome browsing history
 - \`chrome-browser/*/Web Data\` — Chrome autofill and form data
 - \`safari-browser/History.db\` — Safari browsing history
+- \`docker/config.json\` — Docker registry auth tokens
 
 **Encrypt this folder before uploading to cloud storage.**
 
@@ -1927,6 +1991,7 @@ if ! $DRY_RUN; then
   find "$BACKUP_DIR/chrome-browser" -name "Web Data" -exec chmod 600 {} \; 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/safari-browser/History.db" 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/safari-browser/History.db-wal" 2>/dev/null || true
+  chmod 600 "$BACKUP_DIR/docker/config.json" 2>/dev/null || true
 else
   echo "  [dry-run] Would chmod 600 sensitive files"
 fi
@@ -2050,6 +2115,7 @@ if ! $DRY_RUN && ! $ENCRYPT; then
   echo "    - Edge browsing history and form data (edge-browser/*/History, Web Data)"
   echo "    - Chrome browsing history and form data (chrome-browser/*/History, Web Data)"
   echo "    - Safari browsing history (safari-browser/History.db)"
+  echo "    - Docker registry auth tokens (docker/config.json)"
   echo ""
   echo -e "  ${RED}ENCRYPT BEFORE UPLOADING TO GOOGLE DRIVE.${NC}"
   echo "  Example: zip -er workspace-backup.zip $BACKUP_DIR"
