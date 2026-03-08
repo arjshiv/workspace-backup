@@ -1345,6 +1345,42 @@ else
     fi
   fi
 
+  # Workspace metadata
+  if [ -d "$BACKUP_DIR/cursor-ide/workspaceStorage" ]; then
+    CURSOR_WORKSPACE_STORAGE="$HOME/Library/Application Support/Cursor/User/workspaceStorage"
+    echo "  Restoring workspace metadata..."
+    ws_count=0
+    for ws_dir in "$BACKUP_DIR/cursor-ide/workspaceStorage"/*/; do
+      [ -d "$ws_dir" ] || continue
+      ws_hash=$(basename "$ws_dir")
+      if [ -f "$ws_dir/workspace.json" ]; then
+        safe_mkdir "$CURSOR_WORKSPACE_STORAGE/$ws_hash"
+        safe_cp "$ws_dir/workspace.json" "$CURSOR_WORKSPACE_STORAGE/$ws_hash/" 2>/dev/null || true
+        ws_count=$((ws_count + 1))
+      fi
+    done
+    echo "  Restored $ws_count workspace mapping(s)."
+  fi
+
+  # Recent workspaces DB
+  if [ -f "$BACKUP_DIR/cursor-ide/globalStorage/state.vscdb" ]; then
+    CURSOR_GLOBAL_STORAGE="$HOME/Library/Application Support/Cursor/User/globalStorage"
+    safe_mkdir "$CURSOR_GLOBAL_STORAGE"
+    pre_restore_backup "$CURSOR_GLOBAL_STORAGE/state.vscdb"
+    safe_cp "$BACKUP_DIR/cursor-ide/globalStorage/state.vscdb" "$CURSOR_GLOBAL_STORAGE/" 2>/dev/null || warn "Failed to restore state.vscdb"
+    echo "  Recent workspaces DB restored."
+  fi
+
+  # .code-workspace files (informational)
+  if [ -d "$BACKUP_DIR/cursor-ide/code-workspaces" ]; then
+    code_ws_count=$(find "$BACKUP_DIR/cursor-ide/code-workspaces" -type f -name "*.code-workspace" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$code_ws_count" -gt 0 ]; then
+      echo "  $code_ws_count .code-workspace file(s) available in backup at:"
+      echo "    $BACKUP_DIR/cursor-ide/code-workspaces/"
+      echo "  These are informational — workspaces will auto-resolve if project dirs exist."
+    fi
+  fi
+
   echo "  Cursor IDE restored."
 fi
 

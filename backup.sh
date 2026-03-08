@@ -1362,6 +1362,66 @@ else
   else
     warn "Cannot list Cursor extensions — CLI not in PATH and ~/.cursor/extensions not found"
   fi
+
+  # Workspace metadata (workspace.json files mapping hash -> folder path)
+  CURSOR_WORKSPACE_STORAGE="$CURSOR_HOME/User/workspaceStorage"
+  if [ -d "$CURSOR_WORKSPACE_STORAGE" ]; then
+    echo "  Backing up workspace metadata..."
+    run_cmd mkdir -p "$BACKUP_DIR/cursor-ide/workspaceStorage"
+    if ! $DRY_RUN; then
+      ws_count=0
+      for ws_dir in "$CURSOR_WORKSPACE_STORAGE"/*/; do
+        [ -d "$ws_dir" ] || continue
+        ws_hash=$(basename "$ws_dir")
+        if [ -f "$ws_dir/workspace.json" ]; then
+          mkdir -p "$BACKUP_DIR/cursor-ide/workspaceStorage/$ws_hash"
+          cp "$ws_dir/workspace.json" "$BACKUP_DIR/cursor-ide/workspaceStorage/$ws_hash/" 2>/dev/null || true
+          ws_count=$((ws_count + 1))
+        fi
+      done
+      echo "  Backed up $ws_count workspace mapping(s)."
+    else
+      echo "  [dry-run] Would copy workspace.json files from workspaceStorage"
+    fi
+  fi
+
+  # Recent workspaces database (globalStorage/state.vscdb)
+  CURSOR_GLOBAL_STORAGE="$CURSOR_HOME/User/globalStorage"
+  if [ -f "$CURSOR_GLOBAL_STORAGE/state.vscdb" ]; then
+    run_cmd mkdir -p "$BACKUP_DIR/cursor-ide/globalStorage"
+    if ! $DRY_RUN; then
+      if command -v sqlite3 &>/dev/null; then
+        sqlite3 "$CURSOR_GLOBAL_STORAGE/state.vscdb" ".backup '$BACKUP_DIR/cursor-ide/globalStorage/state.vscdb'" 2>/dev/null \
+          || { warn "sqlite3 backup of state.vscdb failed, falling back to cp"; cp "$CURSOR_GLOBAL_STORAGE/state.vscdb" "$BACKUP_DIR/cursor-ide/globalStorage/"; }
+      else
+        cp "$CURSOR_GLOBAL_STORAGE/state.vscdb" "$BACKUP_DIR/cursor-ide/globalStorage/" 2>/dev/null || warn "Failed to copy state.vscdb"
+      fi
+      echo "  Recent workspaces DB backed up."
+    else
+      echo "  [dry-run] Would backup globalStorage/state.vscdb"
+    fi
+  fi
+
+  # .code-workspace files referenced by workspace metadata
+  if [ -d "$BACKUP_DIR/cursor-ide/workspaceStorage" ] && ! $DRY_RUN; then
+    run_cmd mkdir -p "$BACKUP_DIR/cursor-ide/code-workspaces"
+    for ws_json in "$BACKUP_DIR/cursor-ide/workspaceStorage"/*/workspace.json; do
+      [ -f "$ws_json" ] || continue
+      ws_path=$(jq -r '.folder // .workspace // empty' "$ws_json" 2>/dev/null)
+      if [ -n "$ws_path" ]; then
+        # Decode file:// URI to filesystem path
+        decoded_path=$(echo "$ws_path" | sed 's|^file://||' | python3 -c "import sys, urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))" 2>/dev/null || echo "$ws_path")
+        if [[ "$decoded_path" == *.code-workspace ]] && [ -f "$decoded_path" ]; then
+          ws_basename=$(basename "$decoded_path")
+          cp "$decoded_path" "$BACKUP_DIR/cursor-ide/code-workspaces/$ws_basename" 2>/dev/null || true
+        fi
+      fi
+    done
+    code_ws_count=$(find "$BACKUP_DIR/cursor-ide/code-workspaces" -type f -name "*.code-workspace" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$code_ws_count" -gt 0 ]; then
+      echo "  Backed up $code_ws_count .code-workspace file(s)."
+    fi
+  fi
 fi
 
 echo "  Cursor IDE done."
@@ -1680,6 +1740,9 @@ NOTE: Safari data access requires Full Disk Access for Terminal. If files are mi
 - **keybindings.json**: Custom keyboard shortcuts
 - **snippets/**: User-defined code snippets
 - **extensions.txt**: List of installed extensions (via CLI or directory listing)
+- **workspaceStorage/**: Workspace metadata (workspace.json files mapping hash to folder path)
+- **globalStorage/state.vscdb**: Recent workspaces and projects list (SQLite)
+- **code-workspaces/**: Any .code-workspace files referenced by workspace metadata
 
 ### Database Tools
 - **DataGrip**: Settings (\`options/\`), data source configs (\`workspace/\`), SQL console history (\`consoles/\`), code styles, JDBC driver configs, JVM options, license key
