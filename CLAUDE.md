@@ -1,6 +1,6 @@
 # workspace-backup
 
-Backup and restore scripts for migrating a full AI dev environment (Claude Code, Codex CLI, Conductor, Microsoft Edge, Cursor IDE, Desktop Apps) between Macs.
+Backup and restore scripts for migrating a full AI dev environment (Claude Code, Codex CLI, Conductor, Microsoft Edge, Google Chrome, Safari, Cursor IDE, Desktop Apps) between Macs.
 
 ## Structure
 
@@ -15,7 +15,9 @@ Backup and restore scripts for migrating a full AI dev environment (Claude Code,
 - Volta global packages are dynamically captured from `volta list all` and reinstalled on restore. Falls back to a hardcoded list if Volta is unavailable.
 - Skill symlinks (`~/.claude/skills/remotion-best-practices` -> `~/.agents/skills/...`) are resolved to real files during backup and recreated as symlinks during restore.
 - Microsoft Edge profiles are backed up per-profile: individual files (Bookmarks, Preferences, History, etc.) plus tar.gz archives for directories (Sessions, Extensions, Collections). Cookies, Login Data, caches, and Service Workers are excluded. Restore warns strongly if Edge is running.
-- Cursor IDE settings, keybindings, and snippets are copied from `~/Library/Application Support/Cursor/User/`. The extension list is captured via `cursor --list-extensions` when the CLI is available, falling back to reading directory names from `~/.cursor/extensions/`. Restore reinstalls extensions via `cursor --install-extension`.
+- Google Chrome profiles are backed up with the same Chromium strategy as Edge: per-profile individual files + tar.gz archives for directories. Same exclusions (Cookies, Login Data, caches, Service Workers). Open tabs captured via AppleScript when Chrome is running.
+- Safari is backed up differently (non-Chromium): key files from `~/Library/Safari/` (Bookmarks.plist, History.db, TopSites.plist, LastSession.plist, Downloads.plist, CloudTabs.db) plus preferences via `defaults export`. Full Disk Access is required for Terminal to read some Safari files; the script handles inaccessible files gracefully with warnings. Modern Safari extensions are App Store managed and not directly transferable.
+- Cursor IDE settings, keybindings, and snippets are copied from `~/Library/Application Support/Cursor/User/`. The extension list is captured via `cursor --list-extensions` when the CLI is available, falling back to reading directory names from `~/.cursor/extensions/`. Restore reinstalls extensions via `cursor --install-extension`. Workspace metadata (workspaceStorage/workspace.json files mapping hashes to folder paths, globalStorage/state.vscdb for recent workspaces) is backed up alongside settings. Only workspace.json files are copied — large SQLite extension data in workspaceStorage is excluded.
 - Desktop Apps (iTerm2, Warp, Rectangle) preferences are exported as XML plists via `plutil -convert xml1`. User fonts are archived as a tar.gz from `~/Library/Fonts/`. Each app is independently optional — missing apps are skipped without error.
 - AWS credentials (`~/.aws/`) and npm config (`~/.npmrc`) are included in the shell-env backup with `chmod 600` applied to sensitive files.
 - DataGrip settings are backed up from the latest `~/Library/Application Support/JetBrains/DataGrip*/` version. Includes `options/` (settings XMLs, database driver configs), `workspace/` (data source connections), `consoles/` (SQL console history), `codestyles/`, `tasks/`, `jdbc-drivers/`, JVM options, and the license key. Plugins and caches are excluded (regenerated on launch). The license key (`datagrip.key`) and `.pgpass` get `chmod 600`.
@@ -33,12 +35,12 @@ Both scripts produce a `results.json` alongside the backup with structured per-s
 5. Use the error `category` to decide the action:
    - `transient` — retry with `--resume-from=STEP_NAME`
    - `permanent` — fix the root cause (e.g. missing file, bad perms), then retry
-   - `user_action` — ask the user (e.g. quit Edge, re-authenticate)
+   - `user_action` — ask the user (e.g. quit Edge/Chrome/Safari, re-authenticate)
 6. Retry: `bash backup.sh --resume-from=homebrew --yes`
 
-Step names for `--resume-from` (backup.sh): `create_dirs`, `claude_code`, `project_configs`, `codex_cli`, `shared_agents`, `conductor_worktrees`, `conductor_db`, `shell_env`, `homebrew`, `volta`, `edge`, `cursor_ide`, `db_tools`, `desktop_apps`, `github_repos`, `manifest`, `restore_guide`, `copy_scripts`, `permissions`
+Step names for `--resume-from` (backup.sh): `create_dirs`, `claude_code`, `project_configs`, `codex_cli`, `shared_agents`, `conductor_worktrees`, `conductor_db`, `shell_env`, `homebrew`, `volta`, `edge`, `chrome`, `safari`, `cursor_ide`, `db_tools`, `desktop_apps`, `github_repos`, `manifest`, `restore_guide`, `copy_scripts`, `permissions`
 
-Step names for `--resume-from` (restore.sh): `prerequisites`, `shell_env`, `volta`, `claude_code`, `project_configs`, `codex_cli`, `conductor_worktrees`, `conductor_db`, `edge`, `cursor_ide`, `db_tools`, `github_repos`, `desktop_apps`
+Step names for `--resume-from` (restore.sh): `prerequisites`, `shell_env`, `volta`, `claude_code`, `project_configs`, `codex_cli`, `conductor_worktrees`, `conductor_db`, `edge`, `chrome`, `safari`, `cursor_ide`, `db_tools`, `github_repos`, `desktop_apps`
 
 ## Adding a new backup section
 
