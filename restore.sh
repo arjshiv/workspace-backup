@@ -1803,6 +1803,59 @@ end_step
 fi
 
 # ============================================================
+# STEP 19: RAYCAST
+# ============================================================
+if begin_step 19 "raycast" "Restoring Raycast config"; then
+
+if [ ! -d "$BACKUP_DIR/raycast" ]; then
+  echo "  No raycast directory in backup — skipping."
+else
+  RAYCAST_CONFIG="$HOME/.config/raycast"
+  RAYCAST_SCRIPTS="$HOME/Library/Application Support/Raycast/script-commands"
+
+  # Auth and base config
+  if [ -f "$BACKUP_DIR/raycast/config.json" ]; then
+    safe_mkdir "$RAYCAST_CONFIG"
+    pre_restore_backup "$RAYCAST_CONFIG/config.json"
+    safe_cp "$BACKUP_DIR/raycast/config.json" "$RAYCAST_CONFIG/" 2>/dev/null || true
+    chmod 600 "$RAYCAST_CONFIG/config.json" 2>/dev/null || true
+  fi
+
+  # AI chat presets
+  if [ -d "$BACKUP_DIR/raycast/ai" ]; then
+    safe_mkdir "$RAYCAST_CONFIG/ai"
+    safe_cp -R "$BACKUP_DIR/raycast/ai/"* "$RAYCAST_CONFIG/ai/" 2>/dev/null || true
+  fi
+
+  # Script commands
+  if [ -d "$BACKUP_DIR/raycast/script-commands" ]; then
+    safe_mkdir "$RAYCAST_SCRIPTS"
+    safe_cp -R "$BACKUP_DIR/raycast/script-commands/"* "$RAYCAST_SCRIPTS/" 2>/dev/null || warn "Failed to restore Raycast script commands"
+  fi
+
+  # Raycast preferences
+  if [ -f "$BACKUP_DIR/raycast/raycast-preferences.plist" ]; then
+    if ! $DRY_RUN; then
+      defaults import com.raycast.macos "$BACKUP_DIR/raycast/raycast-preferences.plist" 2>/dev/null || warn "Failed to import Raycast preferences"
+    else
+      echo "  [dry-run] defaults import com.raycast.macos raycast-preferences.plist"
+    fi
+  fi
+
+  # Extension list (informational)
+  if [ -f "$BACKUP_DIR/raycast/extensions.txt" ]; then
+    ext_count=$(wc -l < "$BACKUP_DIR/raycast/extensions.txt" | tr -d ' ')
+    echo "  $ext_count Raycast extension(s) were installed. Reinstall from the Raycast Store:"
+    echo "    $BACKUP_DIR/raycast/extensions.txt"
+  fi
+
+  echo "  Raycast restored."
+fi
+
+end_step
+fi
+
+# ============================================================
 # POST-RESTORE VALIDATION
 # ============================================================
 if [ -z "$ONLY_STEP" ]; then
@@ -1938,7 +1991,9 @@ echo ""
 echo "  16. Verify Python versions: pyenv versions"
 echo "      Install missing pipx packages if needed"
 echo ""
-echo "  17. Source your shell config:"
+echo "  17. Open Raycast and reinstall extensions from the Raycast Store"
+echo ""
+echo "  18. Source your shell config:"
 echo "      source ~/.zshrc"
 echo ""
 

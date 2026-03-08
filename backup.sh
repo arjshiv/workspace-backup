@@ -1825,6 +1825,65 @@ end_step
 fi
 
 # ============================================================
+# RAYCAST
+# ============================================================
+if begin_step 21 "raycast" "Backing up Raycast config"; then
+
+RAYCAST_CONFIG="$HOME/.config/raycast"
+RAYCAST_APP_SUPPORT="$HOME/Library/Application Support/com.raycast.macos"
+RAYCAST_SCRIPTS="$HOME/Library/Application Support/Raycast/script-commands"
+
+if [ ! -d "$RAYCAST_CONFIG" ] && [ ! -d "$RAYCAST_APP_SUPPORT" ]; then
+  warn "Raycast not installed — skipping"
+else
+  # Auth and base config
+  copy_if_exists "$RAYCAST_CONFIG/config.json" "$BACKUP_DIR/raycast/"
+
+  # AI chat presets
+  if [ -d "$RAYCAST_CONFIG/ai" ]; then
+    if ! $DRY_RUN; then
+      cp -R "$RAYCAST_CONFIG/ai" "$BACKUP_DIR/raycast/" 2>/dev/null || true
+    else
+      echo "  [dry-run] cp -R ~/.config/raycast/ai $BACKUP_DIR/raycast/"
+    fi
+  fi
+
+  # Extension list from installed extensions
+  if [ -d "$RAYCAST_CONFIG/extensions" ] && ! $DRY_RUN; then
+    ext_list=""
+    for ext_dir in "$RAYCAST_CONFIG/extensions"/*/; do
+      [ -d "$ext_dir" ] || continue
+      if [ -f "$ext_dir/package.json" ]; then
+        ext_name=$(jq -r '.name // empty' "$ext_dir/package.json" 2>/dev/null)
+        ext_version=$(jq -r '.version // empty' "$ext_dir/package.json" 2>/dev/null)
+        [ -n "$ext_name" ] && echo "$ext_name@$ext_version" >> "$BACKUP_DIR/raycast/extensions.txt"
+      fi
+    done
+  fi
+
+  # Script commands (user-created automation)
+  if [ -d "$RAYCAST_SCRIPTS" ] && [ "$(ls -A "$RAYCAST_SCRIPTS" 2>/dev/null)" ]; then
+    if ! $DRY_RUN; then
+      cp -R "$RAYCAST_SCRIPTS" "$BACKUP_DIR/raycast/script-commands" 2>/dev/null || warn "Failed to copy Raycast script commands"
+    else
+      echo "  [dry-run] cp -R Raycast/script-commands $BACKUP_DIR/raycast/"
+    fi
+  fi
+
+  # Raycast preferences plist
+  if ! $DRY_RUN; then
+    defaults export com.raycast.macos "$BACKUP_DIR/raycast/raycast-preferences.plist" 2>/dev/null || true
+  else
+    echo "  [dry-run] defaults export com.raycast.macos raycast-preferences.plist"
+  fi
+fi
+
+echo "  Raycast done."
+
+end_step
+fi
+
+# ============================================================
 # MANIFEST
 # ============================================================
 if begin_step 23 "manifest" "Generating manifest"; then
@@ -1861,7 +1920,8 @@ if ! $DRY_RUN; then
     "github_repos": "$(du -sh "$BACKUP_DIR/github-repos" 2>/dev/null | cut -f1)",
     "vscode": "$(du -sh "$BACKUP_DIR/vscode" 2>/dev/null | cut -f1)",
     "docker": "$(du -sh "$BACKUP_DIR/docker" 2>/dev/null | cut -f1)",
-    "python_tools": "$(du -sh "$BACKUP_DIR/python-tools" 2>/dev/null | cut -f1)"
+    "python_tools": "$(du -sh "$BACKUP_DIR/python-tools" 2>/dev/null | cut -f1)",
+    "raycast": "$(du -sh "$BACKUP_DIR/raycast" 2>/dev/null | cut -f1)"
   }
 }
 MANIFEST
@@ -2008,6 +2068,14 @@ Excludes: VM images, container data, build cache.
 - **pipx-packages.json**: List of pipx-installed CLI tools
 - **.condarc**: Conda configuration
 
+### Raycast
+- **config.json**: Raycast auth and base config
+- **ai/**: AI chat presets
+- **extensions.txt**: List of installed Raycast extensions
+- **script-commands/**: User-created Raycast script commands
+- **raycast-preferences.plist**: Raycast preferences (via \`defaults export\`)
+NOTE: Raycast extensions are installed via the Raycast Store UI — the extension list is informational.
+
 ## SENSITIVE FILES
 - \`codex-cli/auth.json\` — OAuth JWT + refresh tokens
 - \`shell-env/ssh/id_ed25519\` — SSH private key
@@ -2024,6 +2092,7 @@ Excludes: VM images, container data, build cache.
 - \`safari-browser/History.db\` — Safari browsing history
 - \`docker/config.json\` — Docker registry auth tokens
 - \`python-tools/auth.toml\` — Poetry private registry credentials
+- \`raycast/config.json\` — Raycast access token
 
 **Encrypt this folder before uploading to cloud storage.**
 
@@ -2075,6 +2144,7 @@ if ! $DRY_RUN; then
   chmod 600 "$BACKUP_DIR/safari-browser/History.db-wal" 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/docker/config.json" 2>/dev/null || true
   chmod 600 "$BACKUP_DIR/python-tools/auth.toml" 2>/dev/null || true
+  chmod 600 "$BACKUP_DIR/raycast/config.json" 2>/dev/null || true
 else
   echo "  [dry-run] Would chmod 600 sensitive files"
 fi
@@ -2200,6 +2270,7 @@ if ! $DRY_RUN && ! $ENCRYPT; then
   echo "    - Safari browsing history (safari-browser/History.db)"
   echo "    - Docker registry auth tokens (docker/config.json)"
   echo "    - Poetry private registry credentials (python-tools/auth.toml)"
+  echo "    - Raycast access token (raycast/config.json)"
   echo ""
   echo -e "  ${RED}ENCRYPT BEFORE UPLOADING TO GOOGLE DRIVE.${NC}"
   echo "  Example: zip -er workspace-backup.zip $BACKUP_DIR"
